@@ -78,16 +78,3 @@ Zero-Trust Data Transit
 
 Automated Audit Logs
 
-📦 Quick Deployment to GitHub Pages
-
-To get the live demo link working:
-
-Rename your SPA file to index.html.
-
-Push it to your main branch of the nexus-auth repository.
-
-Go to Settings > Pages and select the main branch.
-
-Your site will be live at: https://nexus-pre-auth.github.io/nexus-auth/
-
-© 2026 NexusAuthAI. Intelligence for better healthcare outcomes.
