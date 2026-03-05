@@ -1,0 +1,15 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "NexusAuth Local",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "nexusauth",
+      "Username": "nexusauth",
+      "Password": "nexusauth_dev_pass",
+      "SSLMode": "prefer",
+      "SavePassword": true
+    }
+  }
+}

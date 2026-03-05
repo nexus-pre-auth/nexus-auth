@@ -1,0 +1,341 @@
+# ============================================================
+# NexusAuth Tagging Taxonomy
+# Single source of truth for document classification
+# Version: 1.0.0
+# ============================================================
+
+# ─────────────────────────────────────────────────────────────
+# DOCUMENT TYPE DEFINITIONS
+# 9 canonical document types with keyword triggers
+# ─────────────────────────────────────────────────────────────
+document_types:
+
+  prior_auth_criteria:
+    label: "Prior Authorization Criteria"
+    description: "Payer-specific criteria for prior authorization decisions"
+    keywords:
+      - "prior authorization"
+      - "prior auth"
+      - "pre-authorization"
+      - "preauthorization"
+      - "medical necessity criteria"
+      - "coverage criteria"
+      - "authorization required"
+      - "prior approval"
+      - "PA criteria"
+      - "clinical indications"
+      - "coverage policy"
+    weight: 1.5
+
+  lcd:
+    label: "Local Coverage Determination"
+    description: "CMS LCD documents defining Medicare coverage at the MAC level"
+    keywords:
+      - "local coverage determination"
+      - "LCD"
+      - "L3"
+      - "MAC jurisdiction"
+      - "medicare administrative contractor"
+      - "local coverage"
+      - "noridian"
+      - "palmetto"
+      - "novitas"
+      - "CGS administrators"
+      - "first coast"
+      - "NGS"
+      - "WPS"
+      - "CGS"
+    weight: 2.0
+
+  ncd:
+    label: "National Coverage Determination"
+    description: "CMS NCD documents defining Medicare coverage nationally"
+    keywords:
+      - "national coverage determination"
+      - "NCD"
+      - "national coverage"
+      - "medicare coverage"
+      - "CMS coverage"
+      - "section 1862"
+    weight: 2.0
+
+  fee_schedule:
+    label: "Fee Schedule"
+    description: "Payer fee schedules and reimbursement rate tables"
+    keywords:
+      - "fee schedule"
+      - "reimbursement rate"
+      - "payment rate"
+      - "allowable amount"
+      - "physician fee schedule"
+      - "MPFS"
+      - "conversion factor"
+      - "RVU"
+      - "relative value unit"
+      - "facility rate"
+      - "non-facility rate"
+      - "payment amount"
+    weight: 1.5
+
+  clinical_policy:
+    label: "Clinical Policy Bulletin"
+    description: "Payer clinical policy bulletins (CPBs) and medical policies"
+    keywords:
+      - "clinical policy bulletin"
+      - "CPB"
+      - "medical policy"
+      - "clinical policy"
+      - "coverage policy bulletin"
+      - "benefit policy"
+      - "aetna clinical policy"
+      - "uhc medical policy"
+      - "bcbs medical policy"
+    weight: 1.3
+
+  coverage_determination:
+    label: "Coverage Determination"
+    description: "General coverage determinations and benefit decisions"
+    keywords:
+      - "coverage determination"
+      - "benefit determination"
+      - "coverage decision"
+      - "covered service"
+      - "non-covered service"
+      - "excluded service"
+      - "benefit exclusion"
+    weight: 1.2
+
+  formulary:
+    label: "Drug Formulary"
+    description: "Payer drug formularies and pharmacy benefit lists"
+    keywords:
+      - "formulary"
+      - "drug list"
+      - "preferred drug"
+      - "tier 1"
+      - "tier 2"
+      - "tier 3"
+      - "pharmacy benefit"
+      - "step therapy"
+      - "quantity limit"
+      - "prior auth drug"
+      - "specialty drug"
+    weight: 1.4
+
+  billing_guidelines:
+    label: "Billing Guidelines"
+    description: "Coding and billing guidelines for claims submission"
+    keywords:
+      - "billing guidelines"
+      - "coding guidelines"
+      - "claims submission"
+      - "modifier"
+      - "place of service"
+      - "revenue code"
+      - "UB-04"
+      - "CMS-1500"
+      - "NCCI"
+      - "correct coding initiative"
+      - "bundling"
+      - "unbundling"
+    weight: 1.3
+
+  unknown:
+    label: "Unknown / Unclassified"
+    description: "Documents that could not be confidently classified"
+    keywords: []
+    weight: 0.0
+
+# ─────────────────────────────────────────────────────────────
+# PAYER DOMAIN MAPPINGS
+# Used to auto-detect payer from source URL
+# ─────────────────────────────────────────────────────────────
+payer_domains:
+  CMS:
+    - "cms.gov"
+    - "medicare.gov"
+    - "medicaid.gov"
+    - "lcd.cms.gov"
+    - "coverage.cms.gov"
+  AETNA:
+    - "aetna.com"
+    - "aetnabetterhealth.com"
+  UHC:
+    - "uhcprovider.com"
+    - "unitedhealthcare.com"
+    - "optum.com"
+    - "myuhc.com"
+  BCBS:
+    - "bcbs.com"
+    - "bcbsa.com"
+    - "anthem.com"
+    - "highmark.com"
+    - "carefirst.com"
+    - "premera.com"
+    - "regence.com"
+
+# ─────────────────────────────────────────────────────────────
+# SPECIALTY DETECTION KEYWORDS
+# Maps medical specialties to trigger keywords
+# ─────────────────────────────────────────────────────────────
+specialties:
+  cardiology:
+    - "cardiac"
+    - "cardiology"
+    - "heart failure"
+    - "coronary"
+    - "arrhythmia"
+    - "atrial fibrillation"
+    - "echocardiogram"
+    - "catheterization"
+    - "stent"
+    - "TAVR"
+    - "pacemaker"
+    - "ICD implant"
+
+  oncology:
+    - "oncology"
+    - "cancer"
+    - "chemotherapy"
+    - "radiation therapy"
+    - "tumor"
+    - "malignant"
+    - "neoplasm"
+    - "immunotherapy"
+    - "CAR-T"
+    - "targeted therapy"
+    - "biopsy"
+
+  orthopedics:
+    - "orthopedic"
+    - "joint replacement"
+    - "arthroplasty"
+    - "fracture"
+    - "spine"
+    - "spinal fusion"
+    - "lumbar"
+    - "cervical"
+    - "rotator cuff"
+    - "ACL"
+    - "meniscus"
+
+  neurology:
+    - "neurology"
+    - "neurological"
+    - "stroke"
+    - "seizure"
+    - "epilepsy"
+    - "multiple sclerosis"
+    - "Parkinson"
+    - "dementia"
+    - "Alzheimer"
+    - "MRI brain"
+    - "EEG"
+
+  radiology:
+    - "radiology"
+    - "imaging"
+    - "MRI"
+    - "CT scan"
+    - "PET scan"
+    - "X-ray"
+    - "ultrasound"
+    - "nuclear medicine"
+    - "interventional radiology"
+
+  gastroenterology:
+    - "gastroenterology"
+    - "colonoscopy"
+    - "endoscopy"
+    - "Crohn"
+    - "ulcerative colitis"
+    - "IBD"
+    - "hepatitis"
+    - "liver"
+    - "GERD"
+    - "Barrett"
+
+  pulmonology:
+    - "pulmonology"
+    - "respiratory"
+    - "COPD"
+    - "asthma"
+    - "pulmonary"
+    - "bronchoscopy"
+    - "sleep apnea"
+    - "CPAP"
+    - "spirometry"
+
+  rheumatology:
+    - "rheumatology"
+    - "rheumatoid arthritis"
+    - "lupus"
+    - "psoriatic arthritis"
+    - "ankylosing spondylitis"
+    - "biologics"
+    - "TNF inhibitor"
+    - "JAK inhibitor"
+
+  endocrinology:
+    - "endocrinology"
+    - "diabetes"
+    - "thyroid"
+    - "insulin"
+    - "continuous glucose monitor"
+    - "CGM"
+    - "insulin pump"
+    - "obesity"
+    - "bariatric"
+
+  behavioral_health:
+    - "behavioral health"
+    - "mental health"
+    - "psychiatry"
+    - "psychology"
+    - "depression"
+    - "anxiety"
+    - "substance use"
+    - "addiction"
+    - "ABA therapy"
+    - "autism"
+
+# ─────────────────────────────────────────────────────────────
+# ROUTING MATRIX
+# Maps document type → target tool(s)
+# ─────────────────────────────────────────────────────────────
+routing_matrix:
+  prior_auth_criteria:
+    targets: ["NexusAuth"]
+    priority: "high"
+  lcd:
+    targets: ["NexusAuth"]
+    priority: "high"
+  ncd:
+    targets: ["NexusAuth"]
+    priority: "high"
+  clinical_policy:
+    targets: ["NexusAuth"]
+    priority: "medium"
+  coverage_determination:
+    targets: ["NexusAuth"]
+    priority: "medium"
+  fee_schedule:
+    targets: ["CODEMED"]
+    priority: "high"
+  billing_guidelines:
+    targets: ["CODEMED"]
+    priority: "high"
+  formulary:
+    targets: ["CODEMED"]
+    priority: "medium"
+  unknown:
+    targets: ["REVIEW"]
+    priority: "low"
+
+# ─────────────────────────────────────────────────────────────
+# CONFIDENCE THRESHOLDS
+# ─────────────────────────────────────────────────────────────
+confidence_thresholds:
+  auto_accept: 0.75      # >= 0.75 → accept classification automatically
+  review_required: 0.40  # 0.40–0.74 → flag for human review
+  reject: 0.40           # < 0.40 → classify as 'unknown', flag for review

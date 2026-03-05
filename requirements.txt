@@ -1,0 +1,48 @@
+# NexusAuth — Python Dependencies
+# =================================
+# Install: pip install -r requirements.txt
+
+# ---------------------------------------------------------------------------
+# Core ingestion pipeline
+# ---------------------------------------------------------------------------
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0              # Faster HTML parser for BeautifulSoup
+pyyaml>=6.0.1            # Taxonomy loading
+
+# ---------------------------------------------------------------------------
+# Database
+# ---------------------------------------------------------------------------
+psycopg2-binary>=2.9.9   # PostgreSQL driver (binary = no build deps)
+# psycopg2>=2.9.9        # Use this for production (compile from source)
+
+# ---------------------------------------------------------------------------
+# Embeddings
+# ---------------------------------------------------------------------------
+openai>=1.30.0           # OpenAI Python SDK (text-embedding-3-small)
+tiktoken>=0.7.0          # Token counting for chunking
+
+# ---------------------------------------------------------------------------
+# Data processing
+# ---------------------------------------------------------------------------
+pandas>=2.1.0            # Used in data analysis utilities
+numpy>=1.26.0            # Numerical operations
+
+# ---------------------------------------------------------------------------
+# Job scheduling (for scraper_jobs)
+# ---------------------------------------------------------------------------
+redis>=5.0.0             # Redis client for job queue
+rq>=1.16.0               # Redis Queue for background jobs
+
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
+python-dotenv>=1.0.0     # Load .env files for local development
+tqdm>=4.66.0             # Progress bars for batch processing
+tenacity>=8.2.0          # Retry logic for API calls
+
+# ---------------------------------------------------------------------------
+# Testing
+# ---------------------------------------------------------------------------
+pytest>=7.4.0
+pytest-cov>=4.1.0
