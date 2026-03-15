@@ -19,6 +19,7 @@ import os
 from flask import Flask, jsonify, redirect, request, session
 
 from webpt.connect import WebPTConnector
+from api_routes import recovery_bp
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -34,6 +35,7 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(32))
 
 connector = WebPTConnector()
+app.register_blueprint(recovery_bp)
 
 # ---------------------------------------------------------------------------
 # OAuth flow
