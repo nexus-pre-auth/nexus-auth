@@ -1,22 +1,24 @@
 """
 NexusAuth Ingestion Pipeline — Orchestrator
 ============================================
-Main entry point for the Session 2 ingestion pipeline.
+Main entry point for the ingestion pipeline.
 
 Runs the full pipeline in sequence:
-  Stage 1: Scrape  — Download CMS LCD/NCD bulk data
-  Stage 2: Ingest  — Deduplicate + insert into raw_documents
-  Stage 3: Tag     — Run DocumentTagger → insert into knowledge_documents
-  Stage 4: Embed   — Generate pgvector embeddings → document_embeddings
+  Stage 1: Scrape    — Download CMS LCD/NCD bulk data
+  Stage 2: Ingest    — Deduplicate + insert into raw_documents
+  Stage 3: Extended  — Download CMS MPFS/NCCI/OPPS/ASP/DRG/CARC + payer policies
+  Stage 4: Tag       — Run DocumentTagger → insert into knowledge_documents
+  Stage 5: Embed     — Generate pgvector embeddings → document_embeddings
 
 Usage:
-  # Full pipeline (all stages)
+  # Full pipeline (all stages, including extended CMS sources)
   python -m ingestion.pipeline --all
 
-  # Individual stages
-  python -m ingestion.pipeline --scrape
-  python -m ingestion.pipeline --tag
-  python -m ingestion.pipeline --embed
+  # Original CMS LCD/NCD only
+  python -m ingestion.pipeline --scrape --tag --embed
+
+  # Extended data sources only
+  python -m ingestion.pipeline --extended
 
   # Dry run (scrape only, no DB writes)
   python -m ingestion.pipeline --scrape --dry-run
@@ -29,7 +31,6 @@ Usage:
 
 Environment variables:
   DATABASE_URL    — PostgreSQL connection string
-                    (default: postgresql://nexusauth:nexusauth@localhost:5432/nexusauth)
   OPENAI_API_KEY  — Required for --embed stage
   LOG_LEVEL       — Logging verbosity (default: INFO)
 """
@@ -207,6 +208,156 @@ def stage_tag(
     return result
 
 
+def stage_scrape_extended(
+    conn,
+    dry_run: bool = False,
+    max_docs: int | None = None,
+    include_mpfs: bool = True,
+    include_ncci: bool = True,
+    include_opps: bool = True,
+    include_asp: bool = True,
+    include_drg: bool = True,
+    include_carc: bool = True,
+    include_payer_policies: bool = True,
+) -> dict:
+    """
+    Stage 3 (Extended): Scrape supplemental CMS data sources and commercial
+    payer policies, then insert into raw_documents.
+
+    Sources:
+      - CMS MPFS physician fee schedule
+      - CMS NCCI PTP + MUE edits
+      - CMS OPPS / APC addenda
+      - CMS ASP drug pricing
+      - CMS MS-DRG weights
+      - CMS CARC + RARC remittance codes
+      - Commercial payer policies (Aetna, UHC, Cigna, Humana)
+
+    Returns stats dict.
+    """
+    from ingestion.deduplicator import process_batch
+
+    logger.info("=" * 60)
+    logger.info("STAGE EXTENDED: Supplemental CMS + Payer Policy Scrape")
+    logger.info("=" * 60)
+
+    start = time.time()
+    all_documents: list[dict] = []
+
+    # CMS MPFS
+    if include_mpfs:
+        try:
+            from ingestion.scrapers.cms_mpfs_scraper import scrape_cms_mpfs
+            logger.info("Scraping CMS MPFS fee schedule...")
+            docs = list(scrape_cms_mpfs())
+            logger.info("MPFS: %d documents", len(docs))
+            all_documents.extend(docs)
+        except Exception as exc:
+            logger.warning("MPFS scrape failed (non-fatal): %s", exc)
+
+    # CMS NCCI
+    if include_ncci:
+        try:
+            from ingestion.scrapers.cms_ncci_scraper import scrape_all_ncci
+            logger.info("Scraping CMS NCCI edits (PTP + MUE)...")
+            docs = list(scrape_all_ncci())
+            logger.info("NCCI: %d documents", len(docs))
+            all_documents.extend(docs)
+        except Exception as exc:
+            logger.warning("NCCI scrape failed (non-fatal): %s", exc)
+
+    # CMS OPPS
+    if include_opps:
+        try:
+            from ingestion.scrapers.cms_opps_scraper import scrape_cms_opps
+            logger.info("Scraping CMS OPPS / APC addenda...")
+            docs = list(scrape_cms_opps())
+            logger.info("OPPS: %d documents", len(docs))
+            all_documents.extend(docs)
+        except Exception as exc:
+            logger.warning("OPPS scrape failed (non-fatal): %s", exc)
+
+    # CMS ASP drug pricing
+    if include_asp:
+        try:
+            from ingestion.scrapers.cms_asp_scraper import scrape_cms_asp
+            logger.info("Scraping CMS ASP drug pricing...")
+            docs = list(scrape_cms_asp())
+            logger.info("ASP: %d documents", len(docs))
+            all_documents.extend(docs)
+        except Exception as exc:
+            logger.warning("ASP scrape failed (non-fatal): %s", exc)
+
+    # CMS DRG weights
+    if include_drg:
+        try:
+            from ingestion.scrapers.cms_drg_scraper import scrape_cms_drg
+            logger.info("Scraping CMS MS-DRG weights...")
+            docs = list(scrape_cms_drg())
+            logger.info("DRG: %d documents", len(docs))
+            all_documents.extend(docs)
+        except Exception as exc:
+            logger.warning("DRG scrape failed (non-fatal): %s", exc)
+
+    # CMS CARC + RARC
+    if include_carc:
+        try:
+            from ingestion.scrapers.cms_carc_scraper import scrape_all_remittance_codes
+            logger.info("Scraping CARC + RARC remittance codes...")
+            docs = list(scrape_all_remittance_codes())
+            logger.info("CARC/RARC: %d documents", len(docs))
+            all_documents.extend(docs)
+        except Exception as exc:
+            logger.warning("CARC/RARC scrape failed (non-fatal): %s", exc)
+
+    # Commercial payer policies
+    if include_payer_policies:
+        try:
+            from ingestion.scrapers.payer_policy_scraper import scrape_all_payer_policies
+            logger.info("Scraping commercial payer policies...")
+            docs = list(scrape_all_payer_policies())
+            logger.info("Payer policies: %d documents", len(docs))
+            all_documents.extend(docs)
+        except Exception as exc:
+            logger.warning("Payer policy scrape failed (non-fatal): %s", exc)
+
+    logger.info("Extended scrape total: %d documents", len(all_documents))
+
+    if max_docs:
+        all_documents = all_documents[:max_docs]
+        logger.info("Limited to %d documents (--max-docs)", max_docs)
+
+    if dry_run:
+        logger.info("DRY RUN: skipping DB insertion for extended scrape")
+        for doc in all_documents[:3]:
+            logger.info(
+                "  [DRY RUN] Would insert: %s (%s)",
+                doc["title"][:60],
+                doc["document_type_hint"],
+            )
+        return {
+            "stage": "extended",
+            "dry_run": True,
+            "scraped": len(all_documents),
+            "inserted": 0,
+            "duplicates": 0,
+            "elapsed": time.time() - start,
+        }
+
+    stats = process_batch(conn, all_documents)
+    result = {
+        "stage": "extended",
+        "dry_run": False,
+        "scraped": stats.total_seen,
+        "inserted": stats.inserted,
+        "duplicates": stats.duplicates,
+        "errors": stats.errors,
+        "elapsed": time.time() - start,
+    }
+    logger.info("Extended stage complete: %s", result)
+    return result
+
+
 def stage_embed(
     conn,
     batch_size: int = 50,
@@ -273,6 +424,22 @@ def print_pipeline_summary(results: list[dict], total_elapsed: float) -> None:
                 r.get("errors", 0),
                 elapsed,
             )
+        elif stage == "extended":
+            if r.get("dry_run"):
+                logger.info(
+                    "  Extended:      DRY RUN scraped=%d (%.1fs)",
+                    r.get("scraped", 0),
+                    elapsed,
+                )
+            else:
+                logger.info(
+                    "  Extended:      scraped=%d, inserted=%d, duplicates=%d, errors=%d (%.1fs)",
+                    r.get("scraped", 0),
+                    r.get("inserted", 0),
+                    r.get("duplicates", 0),
+                    r.get("errors", 0),
+                    elapsed,
+                )
         elif stage == "tag":
             logger.info(
                 "  Tag:           total=%d, tagged=%d, failed=%d, needs_review=%d (%.1fs)",
@@ -329,23 +496,27 @@ Examples:
     stage_group = parser.add_argument_group("Pipeline stages")
     stage_group.add_argument(
         "--all", action="store_true",
-        help="Run all stages: scrape → tag → embed"
+        help="Run all stages: scrape → extended → tag → embed"
     )
     stage_group.add_argument(
         "--scrape", action="store_true",
-        help="Stage 1+2: Scrape CMS data and insert into raw_documents"
+        help="Stage 1+2: Scrape CMS LCD/NCD data and insert into raw_documents"
+    )
+    stage_group.add_argument(
+        "--extended", action="store_true",
+        help="Stage 3 (Extended): Scrape MPFS/NCCI/OPPS/ASP/DRG/CARC + payer policies"
     )
     stage_group.add_argument(
         "--tag", action="store_true",
-        help="Stage 3: Tag pending raw_documents → knowledge_documents"
+        help="Stage 4: Tag pending raw_documents → knowledge_documents"
     )
     stage_group.add_argument(
         "--embed", action="store_true",
-        help="Stage 4: Generate pgvector embeddings for knowledge_documents"
+        help="Stage 5: Generate pgvector embeddings for knowledge_documents"
     )
 
-    # Scraper options
-    scraper_group = parser.add_argument_group("Scraper options")
+    # CMS LCD/NCD scraper options
+    scraper_group = parser.add_argument_group("CMS LCD/NCD scraper options")
     scraper_group.add_argument(
         "--no-lcds", action="store_true",
         help="Skip LCD scraping"
@@ -353,6 +524,37 @@ Examples:
     scraper_group.add_argument(
         "--no-ncds", action="store_true",
         help="Skip NCD scraping"
+    )
+
+    # Extended scraper options
+    extended_group = parser.add_argument_group("Extended scraper options (--extended or --all)")
+    extended_group.add_argument(
+        "--no-mpfs", action="store_true",
+        help="Skip MPFS physician fee schedule scrape"
+    )
+    extended_group.add_argument(
+        "--no-ncci", action="store_true",
+        help="Skip NCCI PTP + MUE edits scrape"
+    )
+    extended_group.add_argument(
+        "--no-opps", action="store_true",
+        help="Skip OPPS / APC addenda scrape"
+    )
+    extended_group.add_argument(
+        "--no-asp", action="store_true",
+        help="Skip ASP drug pricing scrape"
+    )
+    extended_group.add_argument(
+        "--no-drg", action="store_true",
+        help="Skip MS-DRG weight scrape"
+    )
+    extended_group.add_argument(
+        "--no-carc", action="store_true",
+        help="Skip CARC / RARC remittance code scrape"
+    )
+    extended_group.add_argument(
+        "--no-payer-policies", action="store_true",
+        help="Skip commercial payer policy scrape (Aetna, UHC, Cigna, Humana)"
     )
 
     # General options
@@ -405,18 +607,25 @@ def main(argv: list[str] | None = None) -> int:
     setup_logging(args.log_level, args.log_file)
 
     # Validate: at least one stage must be selected
-    if not (args.all or args.scrape or args.tag or args.embed):
+    if not (args.all or args.scrape or args.extended or args.tag or args.embed):
         parser.print_help()
-        logger.error("\nError: specify at least one stage (--all, --scrape, --tag, --embed)")
+        logger.error(
+            "\nError: specify at least one stage "
+            "(--all, --scrape, --extended, --tag, --embed)"
+        )
         return 1
 
     # Determine which stages to run
     run_scrape = args.all or args.scrape
+    run_extended = args.all or args.extended
     run_tag = args.all or args.tag
     run_embed = args.all or args.embed
 
     logger.info("NexusAuth Ingestion Pipeline starting")
-    logger.info("Stages: scrape=%s, tag=%s, embed=%s", run_scrape, run_tag, run_embed)
+    logger.info(
+        "Stages: scrape=%s, extended=%s, tag=%s, embed=%s",
+        run_scrape, run_extended, run_tag, run_embed,
+    )
     logger.info("Options: dry_run=%s, max_docs=%s, batch_size=%s",
                 args.dry_run, args.max_docs, args.batch_size)
 
@@ -437,7 +646,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
 
     try:
-        # Stage 1+2: Scrape + Ingest
+        # Stage 1+2: Scrape + Ingest (LCD/NCD)
         if run_scrape:
             result = stage_scrape_and_ingest(
                 conn,
@@ -448,7 +657,23 @@ def main(argv: list[str] | None = None) -> int:
             )
             results.append(result)
 
-        # Stage 3: Tag
+        # Stage 3 (Extended): MPFS/NCCI/OPPS/ASP/DRG/CARC + payer policies
+        if run_extended and (conn or args.dry_run):
+            result = stage_scrape_extended(
+                conn,
+                dry_run=args.dry_run,
+                max_docs=args.max_docs,
+                include_mpfs=not args.no_mpfs,
+                include_ncci=not args.no_ncci,
+                include_opps=not args.no_opps,
+                include_asp=not args.no_asp,
+                include_drg=not args.no_drg,
+                include_carc=not args.no_carc,
+                include_payer_policies=not args.no_payer_policies,
+            )
+            results.append(result)
+
+        # Stage 4: Tag
         if run_tag and conn:
             result = stage_tag(
                 conn,
