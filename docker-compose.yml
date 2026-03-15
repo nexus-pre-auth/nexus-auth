@@ -1,0 +1,175 @@
+# =============================================================================
+# CodeMed AI — Full-Stack Docker Compose
+# =============================================================================
+# Services:
+#   api       FastAPI backend  → http://localhost:8001
+#   demo      Streamlit UI     → http://localhost:8501
+#   postgres  PostgreSQL 16 + pgvector
+#   redis     Redis 7          (cache)
+#   pgadmin   pgAdmin 4        → http://localhost:5050
+#
+# Quick start:
+#   cp .env.example .env
+#   docker-compose up -d
+#
+# View logs:
+#   docker-compose logs -f api
+#
+# Run migrations:
+#   docker-compose exec postgres psql -U nexusauth -d nexusauth \
+#     -f /docker-entrypoint-initdb.d/001_initial_schema.sql
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # FastAPI backend
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: codemed-api:latest
+    container_name: codemed-api
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      CODEMED_API_KEYS: ${CODEMED_API_KEYS:-dev-key-codemed}
+      DATABASE_URL: postgresql://nexusauth:nexusauth@postgres:5432/nexusauth
+      REDIS_URL: redis://redis:6379/0
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -sf
+        - -H
+        - "X-API-Key: ${CODEMED_API_KEYS:-dev-key-codemed}"
+        - http://localhost:8001/v1/health
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - codemed
+
+  # ---------------------------------------------------------------------------
+  # Streamlit demo
+  # ---------------------------------------------------------------------------
+  demo:
+    image: python:3.11-slim
+    container_name: codemed-demo
+    restart: unless-stopped
+    working_dir: /app
+    command: >
+      bash -c "pip install -q streamlit plotly requests &&
+               streamlit run demo/app.py
+               --server.port 8501
+               --server.address 0.0.0.0
+               --server.headless true
+               --browser.gatherUsageStats false"
+    ports:
+      - "8501:8501"
+    environment:
+      CODEMED_API_URL: http://api:8001
+      CODEMED_API_KEYS: ${CODEMED_API_KEYS:-dev-key-codemed}
+    volumes:
+      - ./demo:/app/demo:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - codemed
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 + pgvector
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: codemed-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nexusauth
+      POSTGRES_PASSWORD: nexusauth
+      POSTGRES_DB: nexusauth
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexusauth -d nexusauth"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - codemed
+
+  # ---------------------------------------------------------------------------
+  # Redis 7 (caching)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: codemed-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - codemed
+
+  # ---------------------------------------------------------------------------
+  # pgAdmin 4 (dev convenience)
+  # ---------------------------------------------------------------------------
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: codemed-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@codemed.dev}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-codemed_admin}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    networks:
+      - codemed
+    profiles:
+      - dev        # Only starts with: docker-compose --profile dev up
+
+# ---------------------------------------------------------------------------
+# Volumes
+# ---------------------------------------------------------------------------
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+
+# ---------------------------------------------------------------------------
+# Networks
+# ---------------------------------------------------------------------------
+networks:
+  codemed:
+    driver: bridge
