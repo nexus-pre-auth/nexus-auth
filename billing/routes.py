@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 
 import stripe
 
@@ -34,7 +34,7 @@ billing_router = APIRouter(tags=["Billing"])
 class CreateCustomerRequest(BaseModel):
     clinic_id: str
     clinic_name: str
-    clinic_email: EmailStr
+    clinic_email: str
 
 
 class AttachPaymentMethodRequest(BaseModel):

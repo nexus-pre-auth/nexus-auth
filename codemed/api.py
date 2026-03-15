@@ -41,6 +41,8 @@ from codemed.meat_extractor import MEATExtractor
 from codemed.nlq_engine import NLQEngine
 from codemed.appeals_generator import AppealsGenerator, DenialScenario
 from codemed.cache import CodeMedCache, CacheNamespace, get_cache
+from billing.routes import billing_router
+from billing.stripe_config import configure_stripe
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +60,8 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+app.include_router(billing_router, prefix="/v1/billing")
 
 # ---------------------------------------------------------------------------
 # Engine singletons (initialised once at startup)
@@ -78,6 +82,8 @@ async def startup_engines():
     _appeals_generator = AppealsGenerator()
     # Initialise cache (graceful fallback if Redis unavailable)
     _cache = get_cache()
+    # Configure Stripe (graceful no-op when key not set)
+    configure_stripe()
     logger.info(
         "CodeMed AI engines initialised (cache=%s)",
         "redis" if _cache.is_available else "disabled",
