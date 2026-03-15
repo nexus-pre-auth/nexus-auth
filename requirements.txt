@@ -1,5 +1,5 @@
-# NexusAuth — Python Dependencies
-# =================================
+# NexusAuth + CodeMed AI — Python Dependencies
+# =============================================
 # Install: pip install -r requirements.txt
 
 # ---------------------------------------------------------------------------
@@ -9,6 +9,13 @@ requests>=2.31.0
 beautifulsoup4>=4.12.0
 lxml>=4.9.0              # Faster HTML parser for BeautifulSoup
 pyyaml>=6.0.1            # Taxonomy loading
+
+# ---------------------------------------------------------------------------
+# CodeMed AI — REST API
+# ---------------------------------------------------------------------------
+fastapi>=0.111.0         # API-First HIPAA Architecture
+uvicorn[standard]>=0.30.0  # ASGI server for FastAPI
+pydantic>=2.7.0          # Request/response validation (FastAPI dependency)
 
 # ---------------------------------------------------------------------------
 # Database
