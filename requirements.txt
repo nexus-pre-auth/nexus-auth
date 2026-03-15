@@ -18,6 +18,17 @@ uvicorn[standard]>=0.30.0  # ASGI server for FastAPI
 pydantic>=2.7.0          # Request/response validation (FastAPI dependency)
 
 # ---------------------------------------------------------------------------
+# CodeMed AI — Caching
+# ---------------------------------------------------------------------------
+redis>=5.0.0             # Already in core deps above; explicit for cache layer
+
+# ---------------------------------------------------------------------------
+# CodeMed AI — Demo
+# ---------------------------------------------------------------------------
+streamlit>=1.35.0        # Interactive demo UI
+plotly>=5.22.0           # Charts in demo (optional)
+
+# ---------------------------------------------------------------------------
 # Database
 # ---------------------------------------------------------------------------
 psycopg2-binary>=2.9.9   # PostgreSQL driver (binary = no build deps)

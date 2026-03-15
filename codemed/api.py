@@ -40,6 +40,7 @@ from codemed.hcc_engine import HCCEngine
 from codemed.meat_extractor import MEATExtractor
 from codemed.nlq_engine import NLQEngine
 from codemed.appeals_generator import AppealsGenerator, DenialScenario
+from codemed.cache import CodeMedCache, CacheNamespace, get_cache
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,12 @@ async def startup_engines():
     _meat_extractor = MEATExtractor()
     _nlq_engine = NLQEngine()
     _appeals_generator = AppealsGenerator()
-    logger.info("CodeMed AI engines initialised")
+    # Initialise cache (graceful fallback if Redis unavailable)
+    _cache = get_cache()
+    logger.info(
+        "CodeMed AI engines initialised (cache=%s)",
+        "redis" if _cache.is_available else "disabled",
+    )
 
 
 def get_hcc_engine() -> HCCEngine:
@@ -297,6 +303,7 @@ async def add_process_time_header(request: Request, call_next):
 @app.get("/v1/health", tags=["System"])
 async def health_check():
     """Check API health and engine status."""
+    cache = get_cache()
     return {
         "status": "healthy",
         "version": "1.0.0",
@@ -306,6 +313,7 @@ async def health_check():
             "nlq": _nlq_engine is not None,
             "appeals": _appeals_generator is not None,
         },
+        "cache": cache.health(),
         "timestamp": datetime.utcnow().isoformat(),
     }
 
@@ -424,6 +432,14 @@ async def search_codes(
     Supports ICD-10 diagnosis codes, CPT procedure codes, and HCPCS Level II
     supply/drug codes. Results are ranked by relevance score.
     """
+    # Build a stable cache key from all search parameters
+    cache_key = f"{request.query}|{sorted(request.code_types or [])}|{request.max_results}|{request.mode}"
+    cache = get_cache()
+    cached = cache.get(CacheNamespace.CODE_SEARCH, cache_key)
+    if cached:
+        cached["latency_ms"] = 0   # Cache hit — report 0ms
+        return CodeSearchResponse(**cached)
+
     start_ms = int(time.time() * 1000)
     results = engine.search(
         query=request.query,
@@ -433,13 +449,15 @@ async def search_codes(
     )
     latency_ms = int(time.time() * 1000) - start_ms
 
-    return CodeSearchResponse(
+    response = CodeSearchResponse(
         query=request.query,
         total_results=len(results),
         results=[r.to_dict() for r in results],
         search_mode=request.mode,
         latency_ms=latency_ms,
     )
+    cache.set(CacheNamespace.CODE_SEARCH, cache_key, response.model_dump())
+    return response
 
 
 @app.get(
@@ -455,23 +473,35 @@ async def lookup_code(
 ):
     """
     Look up a specific medical code (ICD-10, CPT, or HCPCS) by exact code value.
+    Results are cached for 7 days (codes rarely change).
     """
+    cache = get_cache()
+    cached = cache.get(CacheNamespace.CODE_LOOKUP, code.upper())
+    if cached:
+        return CodeLookupResponse(**cached)
+
     result = engine.lookup_code(code)
     if result:
-        return CodeLookupResponse(
+        response = CodeLookupResponse(
             code=result.code,
             description=result.description,
             code_type=result.code_type,
             category=result.category,
             found=True,
         )
-    return CodeLookupResponse(
+        cache.set(CacheNamespace.CODE_LOOKUP, code.upper(), response.model_dump())
+        return response
+
+    response = CodeLookupResponse(
         code=code.upper(),
         description="",
         code_type="unknown",
         category="",
         found=False,
     )
+    # Cache negative lookups for 1 hour to avoid repeated DB misses
+    cache.set(CacheNamespace.CODE_LOOKUP, code.upper(), response.model_dump(), ttl=3600)
+    return response
 
 
 @app.post(
@@ -555,6 +585,24 @@ async def generate_appeal(
         regulatory_citations=letter.regulatory_citations,
         generated_at=letter.generated_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# Cache management endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/v1/cache/stats", tags=["System"])
+async def cache_stats(_: str = Depends(require_api_key)):
+    """Return cache hit/miss statistics."""
+    return get_cache().health()
+
+
+@app.delete("/v1/cache/flush", tags=["System"])
+async def cache_flush(_: str = Depends(require_api_key)):
+    """Flush all CodeMed cache entries (use after data updates)."""
+    cache = get_cache()
+    ok = cache.flush_all()
+    return {"flushed": ok, "message": "Cache cleared" if ok else "Cache not available"}
 
 
 # ---------------------------------------------------------------------------
