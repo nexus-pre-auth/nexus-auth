@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Optional
 
@@ -47,23 +48,6 @@ from billing.stripe_config import configure_stripe
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# App initialisation
-# ---------------------------------------------------------------------------
-
-app = FastAPI(
-    title="CodeMed AI",
-    description=(
-        "Medical Coding Intelligence Engine — V28 HCC Hierarchy, "
-        "MEAT Evidence Extraction, NL Code Search, Prior Auth Appeals"
-    ),
-    version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
-)
-
-app.include_router(billing_router, prefix="/v1/billing")
-
-# ---------------------------------------------------------------------------
 # Engine singletons (initialised once at startup)
 # ---------------------------------------------------------------------------
 
@@ -73,8 +57,8 @@ _nlq_engine: Optional[NLQEngine] = None
 _appeals_generator: Optional[AppealsGenerator] = None
 
 
-@app.on_event("startup")
-async def startup_engines():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     global _hcc_engine, _meat_extractor, _nlq_engine, _appeals_generator
     _hcc_engine = HCCEngine()
     _meat_extractor = MEATExtractor()
@@ -88,6 +72,27 @@ async def startup_engines():
         "CodeMed AI engines initialised (cache=%s)",
         "redis" if _cache.is_available else "disabled",
     )
+    yield
+    # Shutdown — nothing to explicitly tear down yet
+
+
+# ---------------------------------------------------------------------------
+# App initialisation
+# ---------------------------------------------------------------------------
+
+app = FastAPI(
+    title="CodeMed AI",
+    description=(
+        "Medical Coding Intelligence Engine — V28 HCC Hierarchy, "
+        "MEAT Evidence Extraction, NL Code Search, Prior Auth Appeals"
+    ),
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    lifespan=lifespan,
+)
+
+app.include_router(billing_router, prefix="/v1/billing")
 
 
 def get_hcc_engine() -> HCCEngine:
@@ -119,11 +124,20 @@ def get_appeals_generator() -> AppealsGenerator:
 # ---------------------------------------------------------------------------
 
 API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
+_DEFAULT_DEV_KEY = "dev-key-codemed"
+_ENV = os.environ.get("CODEMED_ENV", "development").lower()
 _VALID_API_KEYS = set(
     k.strip()
-    for k in os.environ.get("CODEMED_API_KEYS", "dev-key-codemed").split(",")
+    for k in os.environ.get("CODEMED_API_KEYS", _DEFAULT_DEV_KEY).split(",")
     if k.strip()
 )
+
+# Warn loudly if the default dev key is still set in non-development environments
+if _ENV == "production" and _DEFAULT_DEV_KEY in _VALID_API_KEYS:
+    logger.critical(
+        "SECURITY: Default API key 'dev-key-codemed' is active in production! "
+        "Set CODEMED_API_KEYS to a secure random value immediately."
+    )
 
 
 def require_api_key(api_key: str = Security(API_KEY_HEADER)):
@@ -132,6 +146,12 @@ def require_api_key(api_key: str = Security(API_KEY_HEADER)):
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing API key. Provide X-API-Key header.",
+        )
+    # Block the default dev key in production
+    if _ENV == "production" and api_key == _DEFAULT_DEV_KEY:
+        raise HTTPException(
+            status_code=403,
+            detail="Default development API key is not permitted in production.",
         )
     return api_key
 

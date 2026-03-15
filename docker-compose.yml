@@ -37,9 +37,13 @@ services:
       - "8001:8001"
     environment:
       CODEMED_API_KEYS: ${CODEMED_API_KEYS:-dev-key-codemed}
+      CODEMED_ENV: ${CODEMED_ENV:-development}
       DATABASE_URL: postgresql://nexusauth:nexusauth@postgres:5432/nexusauth
       REDIS_URL: redis://redis:6379/0
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
       postgres:
@@ -65,24 +69,17 @@ services:
   # Streamlit demo
   # ---------------------------------------------------------------------------
   demo:
-    image: python:3.11-slim
+    build:
+      context: .
+      dockerfile: Dockerfile.demo
+    image: codemed-demo:latest
     container_name: codemed-demo
     restart: unless-stopped
-    working_dir: /app
-    command: >
-      bash -c "pip install -q streamlit plotly requests &&
-               streamlit run demo/app.py
-               --server.port 8501
-               --server.address 0.0.0.0
-               --server.headless true
-               --browser.gatherUsageStats false"
     ports:
       - "8501:8501"
     environment:
       CODEMED_API_URL: http://api:8001
       CODEMED_API_KEYS: ${CODEMED_API_KEYS:-dev-key-codemed}
-    volumes:
-      - ./demo:/app/demo:ro
     depends_on:
       api:
         condition: service_healthy

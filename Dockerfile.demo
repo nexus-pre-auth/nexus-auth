@@ -1,0 +1,16 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies at build time (not runtime)
+RUN pip install --no-cache-dir streamlit plotly requests
+
+COPY demo/ ./demo/
+
+EXPOSE 8501
+
+CMD ["streamlit", "run", "demo/app.py", \
+     "--server.port", "8501", \
+     "--server.address", "0.0.0.0", \
+     "--server.headless", "true", \
+     "--browser.gatherUsageStats", "false"]
