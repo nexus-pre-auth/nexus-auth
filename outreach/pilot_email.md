@@ -54,7 +54,10 @@ leaves on the table.
 We'll run all [TOTAL_COUNT] of these fixes for free. You keep 100% of whatever
 we recover.
 
-After the pilot, our fee is 20% of recovered amounts — only when you get paid.
+After the pilot, our fee is performance-based — only when you get paid:
+- CO-16 and CO-97 fixes: **20%** of recovered amount
+- CO-50 appeals (LCD/NCD policy citations): **30%** of recovered amount
+
 No monthly fees, no setup costs.
 
 **Next step:**
@@ -117,7 +120,8 @@ The `stats` response includes `by_code` (counts and amounts per CO code) and
 > can keep doing what they're doing; we're additive.
 
 **"What if you don't recover anything?"**
-> Then you owe us nothing. Our fee is 20% of actual recoveries — zero-risk
+> Then you owe us nothing. Our fee is performance-based — 20% on CO-16/CO-97
+> fixes, 30% on CO-50 appeals — and only on actual recoveries. Zero-risk
 > pilot, and you keep everything we find during the free period.
 
 **"How did you get into our WebPT account?"**

@@ -118,7 +118,11 @@ their WebPT data. Realistic 3-year SAM: 2,000 clinics = ~$49M ARR.
 ## Business model
 
 - No setup fee, no monthly fee
-- 20% of recovered amounts, invoiced monthly, paid net-30
+- Performance-based fee, invoiced monthly, paid net-30:
+  - **20%** on CO-16 (missing info) and CO-97 (bundling) — commodity fixes
+  - **30%** on CO-50 (medical necessity appeals) — payer-specific LCD/NCD
+    research that commands a premium; comparable specialist work bills
+    $150–300/hour manually
 - Clinics can disconnect at any time
 - The model scales: every new claim processed improves pattern detection;
   every new LCD/NCD document indexed improves CO-50 fix rates
@@ -126,7 +130,7 @@ their WebPT data. Realistic 3-year SAM: 2,000 clinics = ~$49M ARR.
 Unit economics (per clinic at steady state):
 - Average monthly denials processed: $[X]
 - Average monthly recovery: $[X]
-- CodeMed fee: $[X] (20%)
+- CodeMed blended fee: ~$[X] (~23–24% blended across CO codes)
 - Gross margin: ~92% (no COGS beyond compute)
 
 ---

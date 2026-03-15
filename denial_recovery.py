@@ -15,7 +15,11 @@ Each denial code has a distinct root cause and a distinct fix strategy:
            → append modifier 59 (distinct procedural service) to CPT code
            → success rate: ~75 %
 
-Revenue model: 20 % of every dollar recovered, zero upfront cost to the clinic.
+Revenue model (tiered by complexity):
+  CO-16  20 % — commodity fix, quick turnaround
+  CO-50  30 % — premium LCD/NCD appeals, specialist work
+  CO-97  20 % — commodity fix, quick turnaround
+Zero upfront cost to the clinic; fee charged only on recovered amounts.
 """
 
 import logging
@@ -32,7 +36,13 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-FEE_PERCENTAGE = 0.20   # CodeMed takes 20 %
+# Per-code fee rates — CO-50 commands a premium because it requires
+# payer-specific LCD/NCD policy research; CO-16 and CO-97 are commodity fixes.
+FEE_RATES = {
+    "CO-16": 0.20,
+    "CO-50": 0.30,
+    "CO-97": 0.20,
+}
 
 SUCCESS_RATES = {
     "CO-16": 0.85,
@@ -322,12 +332,14 @@ class DenialRecoveryEngine:
 
     def _calculate_value(self, billed_amount: float, denial_code: str) -> dict:
         rate = SUCCESS_RATES.get(denial_code, 0.5)
+        fee_rate = FEE_RATES.get(denial_code, 0.20)
         estimated = float(billed_amount or 0) * rate
-        your_fee  = estimated * FEE_PERCENTAGE
+        your_fee  = estimated * fee_rate
         clinic_net = estimated - your_fee
         return {
             "billed_amount":       round(float(billed_amount or 0), 2),
             "success_probability": rate,
+            "fee_rate":            fee_rate,
             "estimated_recovery":  round(estimated, 2),
             "your_fee":            round(your_fee, 2),
             "clinic_net":          round(clinic_net, 2),

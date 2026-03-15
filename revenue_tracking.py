@@ -1,5 +1,10 @@
 """
-Revenue Tracking — 20 % fee on every recovered dollar.
+Revenue Tracking — tiered fee on every recovered dollar.
+
+Fee schedule (mirrors denial_recovery.FEE_RATES):
+  CO-16  20 % — commodity fix
+  CO-50  30 % — premium LCD/NCD appeal
+  CO-97  20 % — commodity fix
 
 Responsibilities:
   • record_payment()        — called when a payer pays a recovered claim
@@ -17,7 +22,12 @@ import psycopg2.extras
 
 logger = logging.getLogger(__name__)
 
-FEE_PERCENTAGE = 0.20
+FEE_RATES = {
+    "CO-16": 0.20,
+    "CO-50": 0.30,
+    "CO-97": 0.20,
+}
+_DEFAULT_FEE_RATE = 0.20
 
 
 class RevenueTracker:
@@ -30,21 +40,32 @@ class RevenueTracker:
 
     def record_payment(self, denial_id: str, paid_amount: float) -> dict:
         """
-        Mark a denial as paid and split the revenue 80/20.
+        Mark a denial as paid and split revenue using the per-code fee rate.
         Returns the split breakdown.
         """
-        your_fee   = round(paid_amount * FEE_PERCENTAGE, 2)
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT denial_code FROM recoverable_denials WHERE id = %s",
+                (denial_id,),
+            )
+            row = cur.fetchone()
+
+        if row is None:
+            raise ValueError(f"Denial {denial_id} not found")
+
+        fee_rate   = FEE_RATES.get(row[0], _DEFAULT_FEE_RATE)
+        your_fee   = round(paid_amount * fee_rate, 2)
         clinic_net = round(paid_amount - your_fee, 2)
 
         with self._conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE recoverable_denials
-                SET status     = 'paid',
-                    paid_at    = NOW(),
+                SET status      = 'paid',
+                    paid_at     = NOW(),
                     paid_amount = %s,
-                    your_fee   = %s,
-                    clinic_net = %s
+                    your_fee    = %s,
+                    clinic_net  = %s
                 WHERE id = %s
                 RETURNING clinic_id
                 """,
@@ -53,20 +74,18 @@ class RevenueTracker:
             row = cur.fetchone()
         self._conn.commit()
 
-        if row is None:
-            raise ValueError(f"Denial {denial_id} not found")
-
         clinic_id = row[0]
         self.rollup_monthly(clinic_id, date.today().replace(day=1))
 
         logger.info(
-            "Payment recorded for denial %s — paid $%.2f, fee $%.2f, clinic $%.2f",
-            denial_id, paid_amount, your_fee, clinic_net,
+            "Payment recorded for denial %s — paid $%.2f, fee $%.2f (%.0f%%), clinic $%.2f",
+            denial_id, paid_amount, your_fee, fee_rate * 100, clinic_net,
         )
         return {
-            "denial_id": denial_id,
+            "denial_id":  denial_id,
+            "fee_rate":   fee_rate,
             "paid_amount": paid_amount,
-            "your_fee": your_fee,
+            "your_fee":   your_fee,
             "clinic_net": clinic_net,
         }
 
