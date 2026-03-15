@@ -42,6 +42,12 @@ tqdm>=4.66.0             # Progress bars for batch processing
 tenacity>=8.2.0          # Retry logic for API calls
 
 # ---------------------------------------------------------------------------
+# WebPT OAuth integration
+# ---------------------------------------------------------------------------
+flask>=3.0.0             # Web server for OAuth endpoints and webhooks
+cryptography>=42.0.0     # Fernet symmetric encryption for token storage
+
+# ---------------------------------------------------------------------------
 # Testing
 # ---------------------------------------------------------------------------
 pytest>=7.4.0
