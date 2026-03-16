@@ -27,6 +27,8 @@ WEBHOOK_EVENTS = [
     "claim.created",
     "claim.updated",
     "claim.submitted",
+    "claim.denied",   # triggers immediate denial detection + fix
+    "claim.paid",     # triggers automatic payment recording
 ]
 
 

@@ -27,6 +27,7 @@ from .token_store import store_tokens
 from .sync import enqueue_historical_sync
 from .webhooks import register_webhook
 from .intelligence_graph import run_pattern_detection
+from denial_recovery import DenialRecoveryEngine
 
 logger = logging.getLogger(__name__)
 
@@ -223,12 +224,21 @@ class WebPTConnector:
         """
         conn = self._db()
         try:
+            # Resolve clinic_id from connection record
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT clinic_id FROM webpt_connections WHERE id = %s",
+                    (connection_id,),
+                )
+                row = cur.fetchone()
+            clinic_id = row[0] if row else None
+
             pattern_count = run_pattern_detection(conn, connection_id)
             logger.info(
                 "Pattern detection complete for %s — %d patterns found",
-                connection_id,
-                pattern_count,
+                connection_id, pattern_count,
             )
+
             with conn.cursor() as cur:
                 cur.execute(
                     "UPDATE webpt_connections SET status = 'ready' WHERE id = %s",
@@ -237,6 +247,22 @@ class WebPTConnector:
             conn.commit()
         finally:
             conn.close()
+
+        # Auto-run first denial scan now that claims are loaded
+        if clinic_id:
+            try:
+                scan_conn = self._db()
+                try:
+                    engine = DenialRecoveryEngine(scan_conn)
+                    result = engine.batch_process(clinic_id)
+                    logger.info(
+                        "Initial denial scan for clinic %s — %d fixed, $%.2f estimated",
+                        clinic_id, result["fixed"], result["estimated_recovery"],
+                    )
+                finally:
+                    scan_conn.close()
+            except Exception as exc:
+                logger.warning("Initial denial scan failed for clinic %s: %s", clinic_id, exc)
 
         return {
             "connection_id": connection_id,

@@ -29,10 +29,12 @@ pandas>=2.1.0            # Used in data analysis utilities
 numpy>=1.26.0            # Numerical operations
 
 # ---------------------------------------------------------------------------
-# Job scheduling (for scraper_jobs)
+# Job scheduling
 # ---------------------------------------------------------------------------
 redis>=5.0.0             # Redis client for job queue
 rq>=1.16.0               # Redis Queue for background jobs
+apscheduler>=3.10.0      # Cron-style scheduler (daily scan, weekly digest, monthly rollup)
+sqlalchemy>=2.0.0        # APScheduler PostgreSQL job store backend
 
 # ---------------------------------------------------------------------------
 # Utilities

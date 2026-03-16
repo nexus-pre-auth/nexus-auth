@@ -20,6 +20,8 @@ from flask import Flask, jsonify, redirect, request, session
 
 from webpt.connect import WebPTConnector
 from api_routes import recovery_bp
+from denial_recovery import DenialRecoveryEngine
+from revenue_tracking import RevenueTracker
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -175,8 +177,14 @@ def webpt_webhook():
 
     logger.info("Received WebPT webhook event: %s", event_type)
 
-    if event_type in ("claim.created", "claim.updated", "claim.submitted"):
+    if event_type in ("claim.created", "claim.updated", "claim.submitted", "claim.denied"):
         _handle_claim_event(claim_data)
+
+    if event_type == "claim.denied":
+        _handle_claim_denied(claim_data)
+
+    if event_type == "claim.paid":
+        _handle_claim_paid(claim_data)
 
     return jsonify({"received": True}), 200
 
@@ -222,6 +230,86 @@ def _handle_claim_event(claim_data: dict) -> None:
                 )],
             )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def _handle_claim_denied(claim_data: dict) -> None:
+    """
+    A claim arrived in denied state — immediately detect and fix it.
+    Runs in-process (fast for single claims); heavy batch work stays in the scheduler.
+    """
+    connection_id = claim_data.get("connection_id")
+    clinic_id     = claim_data.get("clinic_id")
+    if not clinic_id or not connection_id:
+        return
+
+    database_url = os.environ.get("DATABASE_URL", "")
+    conn = psycopg2.connect(database_url)
+    try:
+        engine = DenialRecoveryEngine(conn)
+        detected = engine.detect_recoverable_denials(clinic_id)
+        for denial in detected:
+            try:
+                engine.process_denial(str(denial["id"]))
+            except Exception as exc:
+                logger.warning("Could not process denial %s: %s", denial.get("id"), exc)
+        logger.info(
+            "claim.denied webhook: detected and processed %d denial(s) for clinic %s",
+            len(detected), clinic_id,
+        )
+    except Exception as exc:
+        logger.error("claim.denied handler failed for clinic %s: %s", clinic_id, exc)
+    finally:
+        conn.close()
+
+
+def _handle_claim_paid(claim_data: dict) -> None:
+    """
+    A claim was paid by the payer — auto-record the payment and split revenue.
+    Looks up the matching recoverable_denial by webpt_claim_id.
+    """
+    webpt_claim_id = str(claim_data.get("id") or claim_data.get("claim_id", ""))
+    paid_amount    = claim_data.get("paid_amount") or claim_data.get("amount")
+    if not webpt_claim_id or not paid_amount:
+        return
+
+    try:
+        paid_amount = float(paid_amount)
+    except (TypeError, ValueError):
+        return
+
+    database_url = os.environ.get("DATABASE_URL", "")
+    conn = psycopg2.connect(database_url)
+    try:
+        import psycopg2.extras
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id FROM recoverable_denials
+                WHERE webpt_claim_id = %s
+                  AND status IN ('fixed', 'submitted')
+                ORDER BY detected_at DESC
+                LIMIT 1
+                """,
+                (webpt_claim_id,),
+            )
+            row = cur.fetchone()
+
+        if row is None:
+            logger.debug("claim.paid: no recoverable denial found for claim %s", webpt_claim_id)
+            return
+
+        denial_id = str(row[0])
+        tracker = RevenueTracker(conn)
+        result = tracker.record_payment(denial_id, paid_amount)
+        logger.info(
+            "claim.paid webhook: auto-recorded $%.2f payment for denial %s "
+            "(fee $%.2f @ %.0f%%)",
+            paid_amount, denial_id, result["your_fee"], result["fee_rate"] * 100,
+        )
+    except Exception as exc:
+        logger.error("claim.paid handler failed for claim %s: %s", webpt_claim_id, exc)
     finally:
         conn.close()
 
