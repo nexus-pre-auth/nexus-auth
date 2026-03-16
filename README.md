@@ -11,6 +11,25 @@
 
 ---
 
+## 🚀 Interactive Simulation
+
+A **single-page demo** is included at [`index.html`](index.html) — open it directly in any browser, no server required. It walks through the full CodeMed AI workflow: HCC hierarchy enforcement, MEAT evidence scoring, NLQ code search, and prior auth appeal generation.
+
+For live API calls and real-time results, run the Streamlit demo:
+
+```bash
+# One-command launch (API + demo)
+./demo.sh
+
+# Or manually:
+uvicorn codemed.api:app --port 8001 &
+streamlit run demo/app.py --server.port 8501
+```
+
+Visit **http://localhost:8501** after launch.
+
+---
+
 ## Overview
 
 CodeMed AI automates the highest-value workflows in Medicare revenue cycle management:
