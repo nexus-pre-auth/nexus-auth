@@ -505,7 +505,11 @@ class DenialRecoveryEngine:
                 SELECT title, document_type, lcd_id, ncd_id, source_url
                 FROM knowledge_documents
                 WHERE (cpt_codes && %s OR icd10_codes && %s)
-                  AND document_type IN ('lcd', 'ncd', 'clinical_policy', 'prior_auth_criteria')
+                  AND document_type IN (
+                      'lcd', 'ncd', 'clinical_policy',
+                      'prior_auth_criteria', 'coverage_determination',
+                      'billing_guidelines'
+                  )
                   AND is_active = TRUE
                 ORDER BY confidence_score DESC
                 LIMIT 5
