@@ -30,6 +30,9 @@ from typing import Optional
 import psycopg2
 import psycopg2.extras
 
+from agents.risk_adjustment.v28_engine import V28RiskAdjustmentEngine
+from agents.nexus_auth.policies_2026 import PolicyEngine2026
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -270,36 +273,73 @@ class DenialRecoveryEngine:
 
     def _fix_co50(self, claim: dict) -> tuple[list, str]:
         """
-        CO-50: generate a structured appeal letter asserting medical necessity
-        with references to relevant LCDs / NCDs from the knowledge graph.
+        CO-50: generate a structured appeal letter asserting medical necessity.
+
+        Pipeline:
+          1. V28 engine — validate ICD-10 codes; compute RAF score for context
+          2. PolicyEngine2026 — determine NCD/LCD coverage and appeal path
+          3. _lookup_clinical_policies — pull supporting policy documents
+          4. Render appeal letter with all gathered context
         """
         cpt_codes  = claim.get("cpt_codes") or []
         icd_codes  = claim.get("icd10_codes") or []
         provider   = claim.get("provider_id", "Provider")
         svc_date   = claim.get("service_date") or date.today().isoformat()
+        jurisdiction = (claim.get("raw_payload") or {}).get("mac_jurisdiction", "unknown")
 
-        # Pull relevant LCD / NCD references from knowledge_documents
+        # Step 1: V28 ICD-10 validation + RAF score
+        v28 = V28RiskAdjustmentEngine()
+        v28_result = v28.validate_codes(icd_codes)
+        raf_impact = v28_result.get("raf_impact", {})
+
+        if v28_result.get("invalid_codes"):
+            logger.info(
+                "CO-50 fix: %d ICD-10 code(s) not in V28 mapping for claim %s",
+                len(v28_result["invalid_codes"]),
+                claim.get("webpt_claim_id"),
+            )
+
+        # Step 2: Policy coverage check (NCD → LCD → SAD)
+        primary_cpt = cpt_codes[0] if cpt_codes else ""
+        primary_icd = v28_result["valid_codes"][0] if v28_result["valid_codes"] else (icd_codes[0] if icd_codes else "")
+        policy_engine = PolicyEngine2026(self._conn)
+        coverage = policy_engine.check_coverage(primary_cpt, primary_icd, jurisdiction)
+
+        # Step 3: Knowledge graph policy references
         references = self._lookup_clinical_policies(cpt_codes, icd_codes)
 
+        # Step 4: Render the letter
         letter = self._render_appeal_letter(
             provider=provider,
             service_date=str(svc_date),
             cpt_codes=cpt_codes,
             icd10_codes=icd_codes,
             references=references,
+            coverage=coverage,
+            raf_impact=raf_impact,
+            v28_violations=v28_result.get("hierarchy_violations", []),
         )
 
+        notes_parts = [
+            f"Generated medical necessity appeal for CPT {', '.join(cpt_codes)}",
+            f"with {len(references)} supporting policy reference(s)",
+        ]
+        if raf_impact.get("total_raf"):
+            notes_parts.append(f"RAF score {raf_impact['total_raf']:.3f} included")
+        if coverage.get("appeal_path"):
+            notes_parts.append(f"appeal path: {coverage['appeal_path']}")
+
         fixes = [{
-            "field": "appeal_letter",
-            "value": letter,
-            "source": "generated",
+            "field":      "appeal_letter",
+            "value":      letter,
+            "source":     "generated",
             "references": [r["title"] for r in references],
+            "coverage":   coverage,
+            "v28_valid_codes":   v28_result["valid_codes"],
+            "v28_invalid_codes": [c["code"] for c in v28_result["invalid_codes"]],
+            "raf_total":         raf_impact.get("total_raf"),
         }]
-        notes = (
-            f"Generated medical necessity appeal for CPT {', '.join(cpt_codes)} "
-            f"with {len(references)} supporting policy reference(s)"
-        )
-        return fixes, notes
+        return fixes, "; ".join(notes_parts)
 
     # ------------------------------------------------------------------
     # CO-97: Bundled services — modifier 59
@@ -525,11 +565,48 @@ class DenialRecoveryEngine:
         cpt_codes: list,
         icd10_codes: list,
         references: list,
+        coverage: Optional[dict] = None,
+        raf_impact: Optional[dict] = None,
+        v28_violations: Optional[list] = None,
     ) -> str:
         ref_lines = "\n".join(
             f"  • {r['title']} ({r.get('lcd_id') or r.get('ncd_id') or r['document_type']})"
             for r in references
         ) or "  • Clinical guidelines on file"
+
+        # RAF section — only included when score is meaningful
+        raf_section = ""
+        if raf_impact and raf_impact.get("total_raf", 0) > 0:
+            raf_details = "; ".join(
+                f"{d['code']} → {d['hcc']} (weight {d['weight']})"
+                for d in raf_impact.get("details", [])
+            )
+            raf_section = (
+                f"\nClinical Complexity (CMS-HCC V28 Risk Adjustment):\n"
+                f"The patient's documented conditions carry a combined V28 RAF score of "
+                f"{raf_impact['total_raf']:.3f}, reflecting clinically significant comorbidity "
+                f"burden that supports the medical necessity of the services billed.\n"
+                f"  {raf_details}\n"
+            )
+
+        # Appeal path context from policy engine
+        appeal_path_section = ""
+        if coverage and coverage.get("appeal_path") and not coverage.get("covered", True):
+            appeal_path_section = (
+                f"\nCoverage Determination Context:\n"
+                f"Per the 2026 policy check ({coverage.get('source_title') or coverage.get('source', 'CMS policy')}): "
+                f"{coverage.get('reason', '')}. "
+                f"Recommended appeal path: {coverage['appeal_path']}\n"
+            )
+
+        # V28 hierarchy violation notes (informational — not in letter body)
+        v28_note = ""
+        if v28_violations:
+            v28_note = (
+                f"\n[INTERNAL NOTE — V28 hierarchy violations detected: "
+                + "; ".join(v["code"] for v in v28_violations)
+                + " — verify documentation before submission]\n"
+            )
 
         return (
             f"RE: Medical Necessity Appeal — Services Rendered {service_date}\n\n"
@@ -542,10 +619,13 @@ class DenialRecoveryEngine:
             f"The services rendered were medically necessary and clinically appropriate "
             f"for the documented diagnoses. The treating provider determined that these "
             f"services were required to achieve functional goals and improve the patient's "
-            f"condition based on objective clinical findings.\n\n"
-            f"Supporting Policy References:\n"
+            f"condition based on objective clinical findings.\n"
+            f"{raf_section}"
+            f"{appeal_path_section}"
+            f"\nSupporting Policy References:\n"
             f"{ref_lines}\n\n"
             f"We respectfully request reconsideration of this claim and reprocessing "
             f"for payment in accordance with the patient's benefits.\n\n"
             f"Sincerely,\nCodeMed Denial Recovery Team"
+            f"{v28_note}"
         )
