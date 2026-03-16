@@ -78,7 +78,7 @@ def _download_zip(url: str) -> zipfile.ZipFile:
     req = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "NexusAuth-Ingestion/2.0 (healthcare knowledge pipeline; contact: admin@nexusauth.io)"
+            "User-Agent": "CodeMed-Ingestion/2.0 (healthcare knowledge pipeline; contact: admin@codemedgroup.com)"
         },
     )
     with urllib.request.urlopen(req, timeout=120) as resp:

@@ -454,15 +454,60 @@ class TestIntegrationSmoke:
 
     @pytest.mark.integration
     def test_scrape_and_ingest_dry_run(self):
-        """Dry run scrape completes without errors."""
+        """Dry run scrape completes without errors (network mocked)."""
+        import io, zipfile, csv
+
+        def _make_fake_lcd_zip() -> zipfile.ZipFile:
+            """Build a minimal outer ZIP that matches the CMS LCD zip structure."""
+            # Inner CSV zip containing lcd.csv
+            inner_buf = io.BytesIO()
+            with zipfile.ZipFile(inner_buf, "w") as inner_zf:
+                csv_buf = io.StringIO()
+                writer = csv.DictWriter(
+                    csv_buf,
+                    fieldnames=["lcd_id", "display_id", "title", "status",
+                                "indications", "coverage_indications",
+                                "limitations", "icd_codes", "keywords",
+                                "lcd_version", "orig_det_eff_date", "rev_eff_date",
+                                "last_updated", "last_reviewed_on", "source_lcd_id",
+                                "mcd_publish_date", "icd10_doc"],
+                )
+                writer.writeheader()
+                writer.writerow({
+                    "lcd_id": "L33822", "display_id": "L33822",
+                    "title": "Cardiac Event Monitoring",
+                    "status": "A",
+                    "indications": "Cardiac monitoring indicated for arrhythmia.",
+                    "coverage_indications": "Covered when medically necessary.",
+                    "limitations": "Limited to 30 days.", "icd_codes": "I48.0",
+                    "keywords": "cardiac,arrhythmia",
+                    "lcd_version": "1", "orig_det_eff_date": "2020-01-01",
+                    "rev_eff_date": "2022-01-01", "last_updated": "2022-01-01",
+                    "last_reviewed_on": "2022-01-01", "source_lcd_id": "",
+                    "mcd_publish_date": "2022-01-01", "icd10_doc": "",
+                })
+                inner_zf.writestr("lcd.csv", csv_buf.getvalue())
+            inner_buf.seek(0)
+
+            # Outer ZIP wrapping the inner zip
+            outer_buf = io.BytesIO()
+            with zipfile.ZipFile(outer_buf, "w") as outer_zf:
+                outer_zf.writestr("lcd_csv.zip", inner_buf.read())
+            outer_buf.seek(0)
+            return zipfile.ZipFile(outer_buf)
+
         from ingestion.pipeline import stage_scrape_and_ingest
-        result = stage_scrape_and_ingest(
-            conn=None,
-            include_lcds=True,
-            include_ncds=False,
-            dry_run=True,
-            max_docs=5,
-        )
+        with patch(
+            "ingestion.scrapers.cms_scraper._download_zip",
+            return_value=_make_fake_lcd_zip(),
+        ):
+            result = stage_scrape_and_ingest(
+                conn=None,
+                include_lcds=True,
+                include_ncds=False,
+                dry_run=True,
+                max_docs=5,
+            )
         assert result["dry_run"] is True
         assert result["scraped"] >= 0
 
