@@ -291,11 +291,13 @@ class DenialRecoveryEngine:
         v28 = V28RiskAdjustmentEngine()
         v28_result = v28.validate_codes(icd_codes)
         raf_impact = v28_result.get("raf_impact", {})
+        invalid_codes = v28_result.get("invalid_codes", [])
 
-        if v28_result.get("invalid_codes"):
+        if invalid_codes:
             logger.info(
-                "CO-50 fix: %d ICD-10 code(s) not in V28 mapping for claim %s",
-                len(v28_result["invalid_codes"]),
+                "CO-50 fix: %d ICD-10 code(s) not in V28 mapping for claim %s — "
+                "tagging as v28_invalid for reclassification tracking",
+                len(invalid_codes),
                 claim.get("webpt_claim_id"),
             )
 
@@ -336,9 +338,24 @@ class DenialRecoveryEngine:
             "references": [r["title"] for r in references],
             "coverage":   coverage,
             "v28_valid_codes":   v28_result["valid_codes"],
-            "v28_invalid_codes": [c["code"] for c in v28_result["invalid_codes"]],
+            "v28_invalid_codes": [c["code"] for c in invalid_codes],
             "raf_total":         raf_impact.get("total_raf"),
         }]
+
+        # Tag each V28-invalid code as a separate fix entry so we can
+        # measure the reclassification rate with:
+        #   SELECT COUNT(*) FILTER (
+        #       WHERE fixes_applied @> '[{"source":"v28_invalid"}]'
+        #   ) FROM recoverable_denials WHERE denial_code = 'CO-50'
+        for bad in invalid_codes:
+            fixes.append({
+                "field":  "icd10_code",
+                "code":   bad["code"],
+                "source": "v28_invalid",
+                "reason": bad.get("reason", "Not mapped in V28"),
+                "action": bad.get("action", "Verify documentation supports more specific code"),
+            })
+
         return fixes, "; ".join(notes_parts)
 
     # ------------------------------------------------------------------

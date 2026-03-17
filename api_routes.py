@@ -103,6 +103,57 @@ def recovery_stats(clinic_id: str):
     return jsonify(summary), 200
 
 
+@recovery_bp.get("/api/recovery/stats/<clinic_id>/v28")
+def v28_reclassification_stats(clinic_id: str):
+    """
+    V28 reclassification rate for CO-50 denials.
+
+    Returns the percentage of CO-50 denials that contain at least one
+    ICD-10 code not mapped in V28 — these are the denials that were
+    miscategorised as medical-necessity issues but are actually coding
+    errors (higher fix-rate bucket).
+
+    Use this to validate or refine the assumption that ~10-15% of CO-50
+    denials are V28 code issues before presenting the number externally.
+    """
+    conn = _db()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*)                                                   AS co50_total,
+                    COUNT(*) FILTER (
+                        WHERE fixes_applied @> '[{"source": "v28_invalid"}]'
+                    )                                                          AS v28_reclassified,
+                    ROUND(
+                        COUNT(*) FILTER (
+                            WHERE fixes_applied @> '[{"source": "v28_invalid"}]'
+                        )::numeric
+                        / NULLIF(COUNT(*), 0) * 100,
+                        1
+                    )                                                          AS reclassification_pct,
+                    COALESCE(SUM(billed_amount), 0)                           AS co50_total_billed,
+                    COALESCE(SUM(billed_amount) FILTER (
+                        WHERE fixes_applied @> '[{"source": "v28_invalid"}]'
+                    ), 0)                                                      AS v28_total_billed
+                FROM recoverable_denials
+                WHERE clinic_id = %s
+                  AND denial_code = 'CO-50'
+                """,
+                (clinic_id,),
+            )
+            row = dict(cur.fetchone())
+    finally:
+        conn.close()
+
+    row["note"] = (
+        "v28_reclassified = CO-50 denials containing >=1 ICD-10 code removed in V28. "
+        "These have ~85% fix rate (coding correction) vs 45% for true medical necessity denials."
+    )
+    return jsonify({"clinic_id": clinic_id, **row}), 200
+
+
 @recovery_bp.get("/api/recovery/report/<clinic_id>")
 def monthly_report(clinic_id: str):
     """
