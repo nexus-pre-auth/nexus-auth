@@ -17,6 +17,12 @@ GET  /api/recovery/report/<clinic_id>          Monthly invoice report (?year=&mo
 
 POST /api/recovery/payment/<denial_id>         Record payer payment (body: {paid_amount})
 GET  /api/recovery/denials/<clinic_id>         List denials with optional ?status= filter
+
+-- Approval gate --
+GET  /api/recovery/pending-approval/<clinic_id>   List denials awaiting clinic approval
+GET  /api/recovery/approve/<token>                Approve a denial via email link (HTML response)
+GET  /api/recovery/reject/<token>                 Reject a denial via email link (?reason=...) (HTML)
+POST /api/recovery/submit/<denial_id>             Submit an approved denial to the payer
 """
 
 import os
@@ -28,6 +34,10 @@ from flask import Blueprint, jsonify, request
 
 from denial_recovery import DenialRecoveryEngine
 from revenue_tracking import RevenueTracker
+
+# Base URL used when building approve/reject links in emails.
+# Set APP_BASE_URL in the environment, e.g. "https://app.codemed.io".
+APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:5000")
 
 recovery_bp = Blueprint("recovery", __name__)
 
@@ -282,8 +292,127 @@ def list_denials(clinic_id: str):
 
 
 # ---------------------------------------------------------------------------
+# Approval gate
+# ---------------------------------------------------------------------------
+
+@recovery_bp.get("/api/recovery/pending-approval/<clinic_id>")
+def pending_approval(clinic_id: str):
+    """List all denials awaiting clinic approval (no active token yet)."""
+    conn = _db()
+    try:
+        engine = DenialRecoveryEngine(conn)
+        denials = engine.get_pending_approval_denials(clinic_id)
+    finally:
+        conn.close()
+
+    return jsonify({
+        "clinic_id": clinic_id,
+        "count": len(denials),
+        "denials": [_serialize_denial(d) for d in denials],
+    }), 200
+
+
+@recovery_bp.get("/api/recovery/approve/<token>")
+def approve_denial_link(token: str):
+    """
+    Email-link approval endpoint.
+    Validates the token, transitions denial to 'approved', returns HTML confirmation.
+    """
+    conn = _db()
+    try:
+        engine = DenialRecoveryEngine(conn)
+        denial = engine.approve_denial(token)
+    except ValueError as exc:
+        return _approval_html("error", str(exc), None), 400
+    finally:
+        conn.close()
+
+    return _approval_html(
+        "approved",
+        "Fix approved — this claim will be resubmitted to the payer automatically.",
+        denial,
+    ), 200
+
+
+@recovery_bp.get("/api/recovery/reject/<token>")
+def reject_denial_link(token: str):
+    """
+    Email-link rejection endpoint.
+    Optional query param: ?reason=<text>
+    """
+    reason = request.args.get("reason", "")
+    conn = _db()
+    try:
+        engine = DenialRecoveryEngine(conn)
+        denial = engine.reject_denial(token, reason)
+    except ValueError as exc:
+        return _approval_html("error", str(exc), None), 400
+    finally:
+        conn.close()
+
+    return _approval_html(
+        "rejected",
+        "Fix rejected. Our team has been notified and will follow up.",
+        denial,
+    ), 200
+
+
+@recovery_bp.post("/api/recovery/submit/<denial_id>")
+def submit_denial(denial_id: str):
+    """Submit an approved denial to the payer. Returns the resubmission record."""
+    conn = _db()
+    try:
+        engine = DenialRecoveryEngine(conn)
+        result = engine.submit_denial(denial_id)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    finally:
+        conn.close()
+
+    return jsonify(result), 200
+
+
+# ---------------------------------------------------------------------------
 # Serializer
 # ---------------------------------------------------------------------------
+
+def _approval_html(state: str, message: str, denial: dict | None) -> str:
+    """Minimal confirmation page returned after approve/reject link is clicked."""
+    icon   = {"approved": "✓", "rejected": "✗", "error": "⚠"}.get(state, "ℹ")
+    color  = {"approved": "#16a34a", "rejected": "#dc2626",  "error": "#d97706"}.get(state, "#6b7280")
+    title  = {"approved": "Approved", "rejected": "Rejected", "error": "Error"}.get(state, state.title())
+
+    detail = ""
+    if denial and state == "approved":
+        est = denial.get("estimated_recovery") or 0
+        detail = f'<p style="color:#6b7280;font-size:14px;">' \
+                 f'Estimated recovery: <strong>${float(est):,.2f}</strong></p>'
+
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>CodeMed — {title}</title>
+<style>
+  body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+       background:#f5f5f5;margin:0;display:flex;align-items:center;
+       justify-content:center;min-height:100vh;}}
+  .card{{background:#fff;border-radius:12px;padding:48px 40px;text-align:center;
+         max-width:420px;box-shadow:0 2px 8px rgba(0,0,0,.1);}}
+  .icon{{font-size:48px;color:{color};margin-bottom:16px;}}
+  h1{{margin:0 0 12px;font-size:24px;color:#111;}}
+  p{{color:#374151;line-height:1.6;}}
+  .brand{{margin-top:32px;font-size:12px;color:#9ca3af;}}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="icon">{icon}</div>
+  <h1>{title}</h1>
+  <p>{message}</p>
+  {detail}
+  <div class="brand">CodeMed — Performance-based denial recovery</div>
+</div>
+</body></html>"""
+
 
 def _serialize_denial(d: dict) -> dict:
     """Convert a denial row to a JSON-safe dict."""

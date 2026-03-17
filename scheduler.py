@@ -40,6 +40,8 @@ from apscheduler.triggers.cron import CronTrigger
 from denial_recovery import DenialRecoveryEngine
 from revenue_tracking import RevenueTracker
 
+APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:5000")
+
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s [%(levelname)-8s] %(name)s — %(message)s",
@@ -121,6 +123,104 @@ def job_daily_denial_scan() -> None:
         len(clinics), total_fixed, total_value,
         failed_clinics or "none",
     )
+
+
+# ---------------------------------------------------------------------------
+# Job: send approval request emails
+# ---------------------------------------------------------------------------
+
+def job_send_approval_requests() -> None:
+    """
+    For every clinic, send an approval-request email for any pending_approval
+    denials that do not yet have an active (unexpired, unused) token.
+    Runs daily at 06:30 — 30 minutes after the denial scan so fixes are ready.
+    """
+    from notifications import send_approval_request
+
+    clinics = _get_ready_clinics()
+    logger.info("Approval request job starting — %d clinic(s)", len(clinics))
+
+    sent_total = 0
+    for clinic in clinics:
+        clinic_id     = clinic["clinic_id"]
+        contact_email = clinic.get("contact_email")
+        if not contact_email:
+            continue
+
+        conn = _db()
+        try:
+            engine  = DenialRecoveryEngine(conn)
+            denials = engine.get_pending_approval_denials(clinic_id)
+            if not denials:
+                continue
+
+            # Generate a token for each denial and bundle into one email
+            enriched = []
+            for d in denials:
+                token = engine.generate_approval_token(str(d["id"]))
+                enriched.append({
+                    "denial_id":          str(d["id"]),
+                    "denial_code":        d["denial_code"],
+                    "fix_notes":          d.get("fix_notes") or "",
+                    "estimated_recovery": float(d.get("estimated_recovery") or 0),
+                    "token":              token,
+                })
+        finally:
+            conn.close()
+
+        try:
+            send_approval_request(
+                clinic_id=clinic_id,
+                clinic_name=clinic.get("clinic_name") or clinic_id,
+                to_email=contact_email,
+                denials=enriched,
+                base_url=APP_BASE_URL,
+            )
+            sent_total += len(enriched)
+            logger.info(
+                "Approval request sent to clinic %s — %d denial(s)", clinic_id, len(enriched)
+            )
+        except Exception as exc:
+            logger.error("Approval email failed for clinic %s: %s", clinic_id, exc)
+
+    logger.info("Approval request job complete — %d denial(s) emailed", sent_total)
+
+
+# ---------------------------------------------------------------------------
+# Job: submit approved denials
+# ---------------------------------------------------------------------------
+
+def job_submit_approved_denials() -> None:
+    """
+    Transition all 'approved' denials to 'submitted' and record the attempt.
+    Runs daily at 07:00 — after approval emails have had time to be actioned
+    (same-day approvals from overnight email sends).
+    """
+    clinics = _get_ready_clinics()
+    logger.info("Submission job starting — %d clinic(s)", len(clinics))
+
+    total_submitted = 0
+    for clinic in clinics:
+        clinic_id = clinic["clinic_id"]
+        conn = _db()
+        try:
+            engine  = DenialRecoveryEngine(conn)
+            denials = engine.get_approved_denials(clinic_id)
+            for d in denials:
+                try:
+                    engine.submit_denial(str(d["id"]))
+                    total_submitted += 1
+                except Exception as exc:
+                    logger.warning(
+                        "Could not submit denial %s for clinic %s: %s",
+                        d["id"], clinic_id, exc,
+                    )
+        except Exception as exc:
+            logger.error("Submission job failed for clinic %s: %s", clinic_id, exc)
+        finally:
+            conn.close()
+
+    logger.info("Submission job complete — %d denial(s) submitted", total_submitted)
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +333,24 @@ def build_scheduler() -> BlockingScheduler:
         name="Daily denial detection + fix",
         replace_existing=True,
         misfire_grace_time=3600,   # Run up to 1h late if scheduler was down
+    )
+
+    scheduler.add_job(
+        job_send_approval_requests,
+        CronTrigger(hour=6, minute=30, timezone=TIMEZONE),
+        id="daily_approval_requests",
+        name="Daily approval request emails",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
+    scheduler.add_job(
+        job_submit_approved_denials,
+        CronTrigger(hour=7, minute=0, timezone=TIMEZONE),
+        id="daily_submit_approved",
+        name="Daily submission of approved denials",
+        replace_existing=True,
+        misfire_grace_time=3600,
     )
 
     scheduler.add_job(

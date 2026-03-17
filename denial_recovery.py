@@ -23,8 +23,9 @@ Zero upfront cost to the clinic; fee charged only on recovered amounts.
 """
 
 import logging
+import secrets
 import uuid
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import psycopg2
@@ -140,7 +141,7 @@ class DenialRecoveryEngine:
             cur.execute(
                 """
                 UPDATE recoverable_denials
-                SET status = 'fixed',
+                SET status = 'pending_approval',
                     fixes_applied = %s,
                     fix_notes = %s,
                     fixed_at = NOW(),
@@ -163,7 +164,7 @@ class DenialRecoveryEngine:
         self._conn.commit()
 
         logger.info(
-            "Fixed denial %s (%s) — estimated recovery $%.2f",
+            "Fixed denial %s (%s) — estimated recovery $%.2f — awaiting approval",
             denial_id, code, value["estimated_recovery"],
         )
         return {
@@ -172,7 +173,7 @@ class DenialRecoveryEngine:
             "fixes_applied": fixes,
             "fix_notes": notes,
             "value": value,
-            "status": "fixed",
+            "status": "pending_approval",
         }
 
     def batch_process(self, clinic_id: str) -> dict:
@@ -201,11 +202,11 @@ class DenialRecoveryEngine:
                 logger.warning("Could not process denial %s: %s", row["id"], exc)
                 results.append({"denial_id": str(row["id"]), "status": "error", "error": str(exc)})
 
-        fixed = sum(1 for r in results if r.get("status") == "fixed")
+        fixed = sum(1 for r in results if r.get("status") == "pending_approval")
         total_value = sum(
             r.get("value", {}).get("estimated_recovery", 0)
             for r in results
-            if r.get("status") == "fixed"
+            if r.get("status") == "pending_approval"
         )
 
         logger.info(
@@ -382,6 +383,215 @@ class DenialRecoveryEngine:
         ]
         notes = f"Appended modifier 59 to {', '.join(targeted)} (distinct procedural services)"
         return fixes, notes
+
+    # ------------------------------------------------------------------
+    # Approval gate
+    # ------------------------------------------------------------------
+
+    def generate_approval_token(self, denial_id: str, ttl_days: int = 7) -> str:
+        """
+        Create a one-time approval token for a pending_approval denial.
+        Returns the raw token string (embed in the email link).
+        Idempotent: invalidates any previous unused token for this denial.
+        """
+        token = secrets.token_urlsafe(32)
+        expires_at = datetime.now(timezone.utc) + timedelta(days=ttl_days)
+
+        with self._conn.cursor() as cur:
+            # Expire any previous unused tokens for this denial
+            cur.execute(
+                "UPDATE approval_tokens SET used_at = NOW(), used_action = 'superseded' "
+                "WHERE denial_id = %s AND used_at IS NULL",
+                (denial_id,),
+            )
+            cur.execute(
+                """
+                INSERT INTO approval_tokens (denial_id, token, expires_at)
+                VALUES (%s, %s, %s)
+                """,
+                (denial_id, token, expires_at),
+            )
+        self._conn.commit()
+        return token
+
+    def approve_denial(self, token: str) -> dict:
+        """
+        Validate token and transition denial to 'approved'.
+        Returns the updated denial row or raises ValueError on bad/expired token.
+        """
+        token_row = self._consume_token(token, "approve")
+        denial_id = str(token_row["denial_id"])
+
+        with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE recoverable_denials
+                SET status = 'approved', approved_at = NOW()
+                WHERE id = %s AND status = 'pending_approval'
+                RETURNING *
+                """,
+                (denial_id,),
+            )
+            row = cur.fetchone()
+        self._conn.commit()
+
+        if not row:
+            raise ValueError(f"Denial {denial_id} is not in pending_approval state")
+
+        logger.info("Denial %s approved via email link", denial_id)
+        return dict(row)
+
+    def reject_denial(self, token: str, reason: str = "") -> dict:
+        """
+        Validate token and transition denial back to 'rejected'.
+        Stores the rejection reason so the fix can be revised.
+        """
+        token_row = self._consume_token(token, "reject")
+        denial_id = str(token_row["denial_id"])
+
+        if reason:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE approval_tokens SET rejection_reason = %s WHERE denial_id = %s",
+                    (reason, denial_id),
+                )
+
+        with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE recoverable_denials
+                SET status = 'rejected', rejection_reason = %s
+                WHERE id = %s AND status = 'pending_approval'
+                RETURNING *
+                """,
+                (reason or None, denial_id),
+            )
+            row = cur.fetchone()
+        self._conn.commit()
+
+        if not row:
+            raise ValueError(f"Denial {denial_id} is not in pending_approval state")
+
+        logger.info("Denial %s rejected via email link — reason: %s", denial_id, reason or "none")
+        return dict(row)
+
+    def submit_denial(self, denial_id: str) -> dict:
+        """
+        Transition an approved denial to 'submitted' and record the attempt.
+        This is where clearinghouse/EDI integration will plug in.
+        Returns the resubmission record.
+        """
+        denial = self._get_denial(denial_id)
+        if denial is None:
+            raise ValueError(f"Denial {denial_id} not found")
+        if denial["status"] != "approved":
+            raise ValueError(
+                f"Denial {denial_id} is '{denial['status']}' — must be 'approved' to submit"
+            )
+
+        # Count prior attempts so we can number this one
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(MAX(attempt_number), 0) FROM denial_resubmissions WHERE denial_id = %s",
+                (denial_id,),
+            )
+            attempt = cur.fetchone()[0] + 1
+
+        resubmission_id = str(uuid.uuid4())
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO denial_resubmissions
+                    (id, denial_id, attempt_number, fixes_snapshot, status)
+                VALUES (%s, %s, %s, %s, 'pending')
+                """,
+                (
+                    resubmission_id,
+                    denial_id,
+                    attempt,
+                    psycopg2.extras.Json(denial.get("fixes_applied") or []),
+                ),
+            )
+            cur.execute(
+                "UPDATE recoverable_denials SET status = 'submitted', submitted_at = NOW() WHERE id = %s",
+                (denial_id,),
+            )
+        self._conn.commit()
+
+        logger.info(
+            "Denial %s submitted (attempt #%d) — resubmission_id=%s",
+            denial_id, attempt, resubmission_id,
+        )
+        return {
+            "denial_id": denial_id,
+            "resubmission_id": resubmission_id,
+            "attempt_number": attempt,
+            "status": "submitted",
+        }
+
+    def _consume_token(self, token: str, action: str) -> dict:
+        """
+        Look up and consume a token. Raises ValueError if not found, expired, or already used.
+        """
+        with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM approval_tokens WHERE token = %s",
+                (token,),
+            )
+            row = cur.fetchone()
+
+        if not row:
+            raise ValueError("Invalid approval token")
+        if row["used_at"] is not None:
+            raise ValueError("This approval link has already been used")
+        if row["expires_at"] < datetime.now(timezone.utc):
+            raise ValueError("This approval link has expired")
+
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "UPDATE approval_tokens SET used_at = NOW(), used_action = %s WHERE id = %s",
+                (action, str(row["id"])),
+            )
+        self._conn.commit()
+        return dict(row)
+
+    # ------------------------------------------------------------------
+    # Approval queue helpers
+    # ------------------------------------------------------------------
+
+    def get_pending_approval_denials(self, clinic_id: str) -> list[dict]:
+        """Return all denials awaiting clinic approval that have no active token."""
+        with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT rd.*
+                FROM recoverable_denials rd
+                WHERE rd.clinic_id = %s
+                  AND rd.status = 'pending_approval'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM approval_tokens at
+                      WHERE at.denial_id = rd.id
+                        AND at.used_at IS NULL
+                        AND at.expires_at > NOW()
+                  )
+                ORDER BY rd.estimated_recovery DESC
+                """,
+                (clinic_id,),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+    def get_approved_denials(self, clinic_id: str) -> list[dict]:
+        """Return all denials approved by the clinic but not yet submitted."""
+        with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT * FROM recoverable_denials
+                WHERE clinic_id = %s AND status = 'approved'
+                ORDER BY approved_at ASC
+                """,
+                (clinic_id,),
+            )
+            return [dict(r) for r in cur.fetchall()]
 
     # ------------------------------------------------------------------
     # Value calculation

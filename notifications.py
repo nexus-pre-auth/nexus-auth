@@ -254,6 +254,163 @@ def _send_sendgrid(to_email: str, subject: str, plain: str, html: str) -> None:
 # Public API
 # ---------------------------------------------------------------------------
 
+def _build_approval_body(
+    clinic_name: str,
+    denials: list[dict],
+    base_url: str,
+) -> tuple[str, str]:
+    """
+    Build (plain_text, html) for an approval-request email.
+    Each item in `denials` must have: denial_id, denial_code, fix_notes,
+    estimated_recovery, fixes_applied, approve_url, reject_url.
+    """
+    total = sum(d.get("estimated_recovery", 0) for d in denials)
+
+    # ---- plain text ----
+    lines = [
+        f"Hi {clinic_name},",
+        "",
+        f"CodeMed has fixed {len(denials)} denial(s) worth ${total:,.2f} in estimated recovery.",
+        "Please review and approve each fix so we can resubmit to the payer.",
+        "",
+    ]
+    for i, d in enumerate(denials, 1):
+        lines += [
+            f"Denial #{i}  [{d['denial_code']}]  ${d.get('estimated_recovery', 0):,.2f}",
+            f"  Fix: {d.get('fix_notes', 'See fix details')}",
+            f"  APPROVE: {d['approve_url']}",
+            f"  REJECT:  {d['reject_url']}",
+            "",
+        ]
+    lines += ["Questions? Reply to this email.", "", "— CodeMed"]
+    plain = "\n".join(lines)
+
+    # ---- html ----
+    denial_rows = ""
+    for d in denials:
+        code_badge_color = {"CO-16": "#2563eb", "CO-50": "#d97706", "CO-97": "#7c3aed"}.get(
+            d["denial_code"], "#6b7280"
+        )
+        denial_rows += f"""
+    <div style="border:1px solid #e5e7eb;border-radius:8px;padding:20px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+        <span style="background:{code_badge_color};color:#fff;font-size:12px;font-weight:700;
+                     padding:3px 10px;border-radius:99px;">{d['denial_code']}</span>
+        <span style="font-size:18px;font-weight:700;color:#1a56db;">
+          ${d.get('estimated_recovery', 0):,.2f}
+        </span>
+        <span style="font-size:12px;color:#6b7280;">estimated recovery</span>
+      </div>
+      <p style="margin:0 0 16px;font-size:14px;color:#374151;line-height:1.5;">
+        {d.get('fix_notes', 'Fix applied — see details.')}
+      </p>
+      <div style="display:flex;gap:12px;">
+        <a href="{d['approve_url']}"
+           style="background:#16a34a;color:#fff;text-decoration:none;padding:10px 24px;
+                  border-radius:6px;font-size:14px;font-weight:600;">
+          ✓ Approve &amp; Submit
+        </a>
+        <a href="{d['reject_url']}"
+           style="background:#fff;color:#dc2626;text-decoration:none;padding:10px 24px;
+                  border-radius:6px;font-size:14px;font-weight:600;
+                  border:1px solid #dc2626;">
+          ✗ Reject
+        </a>
+      </div>
+    </div>"""
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8">
+<style>
+  body {{ font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+         color:#1a1a1a;margin:0;padding:0;background:#f5f5f5; }}
+  .wrap {{ max-width:600px;margin:32px auto;background:#fff;border-radius:8px;
+           overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1); }}
+  .hdr  {{ background:#1a56db;padding:24px 32px;color:#fff; }}
+  .hdr h1 {{ margin:0;font-size:20px;font-weight:600; }}
+  .hdr p  {{ margin:4px 0 0;font-size:14px;opacity:.85; }}
+  .body {{ padding:32px; }}
+  .summary {{ background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;
+              padding:16px 20px;margin-bottom:24px; }}
+  .summary strong {{ color:#16a34a; }}
+  .footer {{ padding:16px 32px;background:#f8fafc;font-size:12px;
+             color:#9ca3af;text-align:center; }}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hdr">
+    <h1>Action Required — {clinic_name}</h1>
+    <p>CodeMed has fixes ready to submit. Your approval is needed.</p>
+  </div>
+  <div class="body">
+    <div class="summary">
+      <strong>{len(denials)} denial(s)</strong> fixed &mdash;
+      <strong>${total:,.2f}</strong> in estimated recovery awaiting your approval.
+    </div>
+    {denial_rows}
+  </div>
+  <div class="footer">
+    Questions? Reply to this email. &nbsp;|&nbsp;
+    CodeMed — Performance-based denial recovery
+  </div>
+</div>
+</body>
+</html>"""
+
+    return plain, html
+
+
+def send_approval_request(
+    clinic_id: str,
+    clinic_name: str,
+    to_email: str,
+    denials: list[dict],
+    base_url: str,
+) -> None:
+    """
+    Send an approval-request email listing all pending_approval denials.
+
+    Each item in `denials` must have: denial_id, denial_code, fix_notes,
+    estimated_recovery, approve_token, reject_token.
+
+    `base_url` is the public root of the app, e.g. "https://app.codemed.io".
+    Approve/reject links are built as:
+        {base_url}/api/recovery/approve/<token>
+        {base_url}/api/recovery/reject/<token>
+    """
+    if not denials:
+        return
+
+    enriched = []
+    for d in denials:
+        tok = d.get("token", "")
+        enriched.append({
+            **d,
+            "approve_url": f"{base_url.rstrip('/')}/api/recovery/approve/{tok}",
+            "reject_url":  f"{base_url.rstrip('/')}/api/recovery/reject/{tok}",
+        })
+
+    total = sum(d.get("estimated_recovery", 0) for d in enriched)
+    subject = (
+        f"{clinic_name}: ${total:,.0f} in fixes ready — approval needed"
+    )
+
+    plain, html = _build_approval_body(clinic_name, enriched, base_url)
+
+    if os.getenv("SENDGRID_API_KEY"):
+        _send_sendgrid(to_email, subject, plain, html)
+        logger.info("Approval request sent via SendGrid to %s (clinic %s)", to_email, clinic_id)
+    elif os.getenv("SMTP_HOST"):
+        _send_smtp(to_email, subject, plain, html)
+        logger.info("Approval request sent via SMTP to %s (clinic %s)", to_email, clinic_id)
+    else:
+        logger.info(
+            "Approval request (no email backend) for clinic %s:\n%s", clinic_id, plain
+        )
+
+
 def send_weekly_digest(
     clinic_id: str,
     clinic_name: str,
