@@ -1,0 +1,20 @@
+# Railway deployment config
+# Docs: https://docs.railway.app/reference/config-as-code
+#
+# In Railway, create TWO services from this repo:
+#   1. "web"       — the Flask API (default)
+#   2. "scheduler" — override startCommand to: python scheduler.py
+#
+# Plus two managed services: PostgreSQL and Redis.
+# Railway auto-injects DATABASE_URL and REDIS_URL for those.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "gunicorn --bind 0.0.0.0:$PORT --workers 2 --timeout 120 app:app"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
