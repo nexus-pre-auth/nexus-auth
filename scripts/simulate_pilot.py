@@ -131,34 +131,46 @@ def build_claim_batch(connection_id: str) -> list[dict]:
         cpts = random.sample(["97110", "97140", "97530"], k=random.randint(1, 2))
         icds = random.sample(V28_VALID_ICD10[:5], k=1)
         claims.append(base(cpts, icds, _rand_amount(120, 400)))
-        # Note: no billing_npi in payload → CO-16 trigger
+        # No billing_npi in payload → CO-16 trigger
 
     # CO-16 block — auth-required code, missing prior_auth_number
     for _ in range(7):
         cpts = [random.choice(list(AUTH_REQUIRED))]
         icds = random.sample(V28_VALID_ICD10, k=1)
         claims.append(base(cpts, icds, _rand_amount(200, 500)))
-        # No prior_auth_number in payload → CO-16 trigger
+        # No prior_auth_number → CO-16 trigger
 
-    # CO-50 block — high-risk CPT, valid V28 ICD-10 codes (true med necessity denials)
+    # CO-50 block — high-risk CPT, NO ICD-10 codes (triggers medical necessity flag)
+    # billing_npi present so only CO-50 fires, not CO-16
+    npi = "1234567890"
     for _ in range(14):
-        cpt  = random.choice(list(HIGH_RISK_CO50))
-        icds = random.sample(V28_VALID_ICD10, k=random.randint(1, 3))
-        claims.append(base([cpt], icds, _rand_amount(250, 650), {"payer": "CMS"}))
+        cpt = random.choice(list(HIGH_RISK_CO50))
+        claims.append(base(
+            [cpt], [],            # empty ICD-10 → CO-50 trigger
+            _rand_amount(250, 650),
+            {"payer": "CMS", "billing_npi": npi},
+        ))
 
     # CO-50 block — V28-INVALID ICD-10 codes (reclassification test cases)
+    # These have icd10 codes that aren't in the V28 crosswalk; engine flags them
     for _ in range(4):
         cpt  = random.choice(list(HIGH_RISK_CO50))
-        # Mix one valid with one invalid to make it realistic
-        icds = [random.choice(V28_INVALID_ICD10), random.choice(V28_VALID_ICD10[:4])]
-        claims.append(base([cpt], icds, _rand_amount(200, 500), {"payer": "AETNA"}))
+        icds = [random.choice(V28_INVALID_ICD10)]
+        claims.append(base(
+            [cpt], icds,
+            _rand_amount(200, 500),
+            {"payer": "AETNA", "billing_npi": npi},
+        ))
 
     # CO-97 block — 2+ bundled PT codes, no modifier 59
+    # billing_npi present so only CO-97 fires
     for _ in range(12):
         cpts = random.sample(list(BUNDLED), k=random.randint(2, 3))
         icds = random.sample(V28_VALID_ICD10[:6], k=1)
-        # raw_payload has no "modifiers" key → CO-97 trigger
-        claims.append(base(cpts, icds, _rand_amount(300, 800)))
+        claims.append(base(
+            cpts, icds, _rand_amount(300, 800),
+            {"billing_npi": npi},   # present → no CO-16; no modifiers → CO-97
+        ))
 
     random.shuffle(claims)
     return claims

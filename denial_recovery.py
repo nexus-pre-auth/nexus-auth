@@ -424,10 +424,19 @@ class DenialRecoveryEngine:
         if missing_npi or missing_auth or missing_diag:
             codes.append("CO-16")
 
-        # CO-50: no ICD-10 → CPT medical necessity linkage on high-risk codes
+        # CO-50: high-risk CPT with missing or V28-invalid ICD-10 codes.
+        # Real CO-50 denials usually DO have diagnosis codes — the payer rejects
+        # the medical necessity argument.  We trigger on two scenarios:
+        #   a) No ICD-10 at all — obvious documentation gap
+        #   b) ICD-10 codes present but none map in V28 — coding error masquerading
+        #      as a medical necessity denial (the V28 reclassification case)
         HIGH_RISK_CPTS = {"97750", "97755", "97760", "97761", "97763"}
-        if any(c in HIGH_RISK_CPTS for c in cpt_codes) and not icd_codes:
-            codes.append("CO-50")
+        if any(c in HIGH_RISK_CPTS for c in cpt_codes):
+            v28_check = V28RiskAdjustmentEngine()
+            v28_mapped = v28_check.load_v28_mapping()
+            all_icd_invalid = bool(icd_codes) and all(c not in v28_mapped for c in icd_codes)
+            if not icd_codes or all_icd_invalid:
+                codes.append("CO-50")
 
         # CO-97: multiple bundled PT codes billed on the same date without modifier
         bundled = [c for c in cpt_codes if c in BUNDLED_PT_CODES]
