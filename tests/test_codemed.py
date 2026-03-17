@@ -95,7 +95,7 @@ class TestHCCEngine:
         """Known ICD-10 code maps to an HCC."""
         hcc = self.engine.map_icd10_to_hcc("E11.9")
         assert hcc is not None
-        assert hcc.hcc_number == 19
+        assert hcc.hcc_number == 38   # V28: T2DM without complications → HCC 38
         assert hcc.source_icd10 == "E11.9"
         assert hcc.raf_weight > 0
 
@@ -118,21 +118,21 @@ class TestHCCEngine:
         assert len(result.hierarchy_conflicts) == 0
 
     def test_diabetes_hierarchy_enforcement(self):
-        """HCC 18 (DM with complications) trumps HCC 19 (DM without complications)."""
+        """HCC 37 (DM with chronic complications) trumps HCC 38 (DM without complications)."""
         result = self.engine.enforce_hierarchy(["E11.40", "E11.9"])
         assert len(result.hierarchy_conflicts) == 1
         active_hccs = [h.hcc_number for h in result.active_hccs]
         suppressed_hccs = [h.hcc_number for h in result.suppressed_hccs]
-        assert 18 in active_hccs   # E11.40 = HCC 18 (with complications)
-        assert 19 in suppressed_hccs  # E11.9 = HCC 19 (without complications)
+        assert 37 in active_hccs      # V28: E11.40 = HCC 37 (chronic complications)
+        assert 38 in suppressed_hccs  # V28: E11.9  = HCC 38 (without complications)
 
     def test_ckd_hierarchy_enforcement(self):
         """Stage 5 CKD trumps Stage 4 and Stage 3b."""
         result = self.engine.enforce_hierarchy(["N18.5", "N18.4", "N18.32"])
         active_hccs = [h.hcc_number for h in result.active_hccs]
-        assert 330 in active_hccs  # N18.5 = HCC 330 (Stage 5)
-        assert 331 not in active_hccs
-        assert 332 not in active_hccs
+        assert 326 in active_hccs   # V28: N18.5 = HCC 326 (Stage 5)
+        assert 327 not in active_hccs
+        assert 328 not in active_hccs
 
     def test_no_conflict_different_groups(self):
         """Codes in different hierarchy groups — no conflicts."""
@@ -171,9 +171,9 @@ class TestHCCEngine:
 
     def test_get_hcc_info(self):
         """get_hcc_info returns codes for a given HCC number."""
-        info = self.engine.get_hcc_info(19)
+        info = self.engine.get_hcc_info(38)  # V28 HCC 38: DM without complications
         assert len(info) > 0
-        assert all(item["hcc_number"] == 19 for item in info)
+        assert all(item["hcc_number"] == 38 for item in info)
 
     def test_summary_has_required_keys(self):
         """result.summary() contains all expected keys."""
@@ -181,7 +181,8 @@ class TestHCCEngine:
         summary = result.summary()
         for key in ["total_icd10_codes", "hccs_found", "hccs_active",
                     "hccs_suppressed", "raf_before", "raf_after",
-                    "raf_delta", "hierarchy_conflicts"]:
+                    "raf_delta", "hierarchy_conflicts",
+                    "raf_total_with_interactions", "interaction_bonuses"]:
             assert key in summary, f"Missing key: {key}"
 
 
@@ -629,7 +630,7 @@ class TestIntegrationPipeline:
 
         # Only active HCC source codes should be documented
         active_icd10s = [h.source_icd10 for h in hcc_result.active_hccs]
-        assert "E11.40" in active_icd10s  # HCC 18 wins over HCC 19
+        assert "E11.40" in active_icd10s  # V28 HCC 37 wins over HCC 38
 
         # Step 2: Extract MEAT for active codes
         meat_result = extractor.extract(
