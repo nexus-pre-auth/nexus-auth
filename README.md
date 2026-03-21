@@ -6,7 +6,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111+-green.svg)](https://fastapi.tiangolo.com)
 [![Redis](https://img.shields.io/badge/Redis-7.0+-red.svg)](https://redis.io)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.35+-ff4b4b.svg)](https://streamlit.io)
-[![Tests](https://img.shields.io/badge/tests-67%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-190%20passing-brightgreen.svg)](tests/)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)](LICENSE)
 
 ---
@@ -84,7 +84,7 @@ Built for Medicare Advantage plans, ACOs, medical groups, and RCM companies.
 - Redis caching with graceful fallback (no crash when Redis unavailable)
 - API key authentication via `X-API-Key` header
 - Full audit log for every enforcement decision (PostgreSQL)
-- 67 passing tests — unit, integration, and API model validation
+- 190 passing tests — unit, integration, and API model validation
 - FastAPI with auto-generated OpenAPI/Swagger docs
 
 ---
@@ -395,7 +395,7 @@ cp .env.example .env
 - [x] Prior auth appeal letter generation
 - [x] Redis caching layer with graceful fallback
 - [x] Streamlit interactive demo
-- [x] 67 passing tests
+- [x] 190 passing tests
 - [x] Docker Compose full-stack
 
 **v1.5**

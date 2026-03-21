@@ -92,7 +92,12 @@ def _handle_payment_succeeded(invoice: dict) -> None:
             )
         conn.close()
     except Exception as exc:
+        # Re-raise so Stripe retries the webhook. A 500 response tells Stripe
+        # the event was not processed; Stripe will retry for up to 3 days.
+        # Silently swallowing the error would leave revenue_shares stale with
+        # no opportunity for recovery.
         logger.error("Failed to update revenue_shares after payment: %s", exc)
+        raise RuntimeError(f"DB update failed for invoice {invoice['id']}") from exc
 
 
 def _handle_payment_failed(invoice: dict) -> None:

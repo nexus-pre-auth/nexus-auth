@@ -67,7 +67,7 @@ def create_monthly_invoice(
 
     invoice = stripe.Invoice.create(
         customer=customer.id,
-        auto_advance=True,
+        auto_advance=False,          # We finalize explicitly below
         collection_method="charge_automatically",
         due_date=due_ts,
         metadata={
@@ -78,9 +78,12 @@ def create_monthly_invoice(
         },
     )
 
-    stripe.Invoice.send_invoice(invoice.id)
+    # charge_automatically invoices are charged via finalize_invoice(), not
+    # send_invoice() — send_invoice() is only for collection_method="send_invoice"
+    # and raises an InvalidRequestError when called on auto-charge invoices.
+    invoice = stripe.Invoice.finalize_invoice(invoice.id)
     logger.info(
-        "Invoice %s sent to clinic %s — $%.2f due", invoice.id, clinic_id, total_fee
+        "Invoice %s finalized for clinic %s — $%.2f auto-charging", invoice.id, clinic_id, total_fee
     )
 
     return {

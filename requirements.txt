@@ -16,6 +16,7 @@ pyyaml>=6.0.1            # Taxonomy loading
 fastapi>=0.111.0         # API-First HIPAA Architecture
 uvicorn[standard]>=0.30.0  # ASGI server for FastAPI
 pydantic>=2.7.0          # Request/response validation (FastAPI dependency)
+slowapi>=0.1.9           # Rate limiting for FastAPI (leaky-bucket, per-IP)
 
 # ---------------------------------------------------------------------------
 # CodeMed AI — Caching

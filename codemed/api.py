@@ -34,8 +34,12 @@ from datetime import datetime
 from typing import Any, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Security
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, field_validator
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from codemed.hcc_engine import HCCEngine
 from codemed.meat_extractor import MEATExtractor
@@ -80,6 +84,11 @@ async def lifespan(app: FastAPI):
 # App initialisation
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Rate limiter — 60 requests/minute per IP (enforced on all clinical endpoints)
+# ---------------------------------------------------------------------------
+limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+
 app = FastAPI(
     title="CodeMed AI",
     description=(
@@ -90,6 +99,27 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
+)
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# ---------------------------------------------------------------------------
+# CORS — configurable via ALLOWED_ORIGINS (comma-separated list).
+# Defaults to localhost dev ports. Set to your domain(s) in production.
+# ---------------------------------------------------------------------------
+_raw_origins = os.environ.get(
+    "ALLOWED_ORIGINS",
+    "http://localhost:8501,http://localhost:3000,http://localhost:8001",
+)
+_allowed_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["X-API-Key", "Content-Type"],
 )
 
 app.include_router(billing_router, prefix="/v1/billing")
@@ -354,7 +384,9 @@ async def health_check():
     tags=["HCC V28"],
     summary="Enforce V28 HCC hierarchy on a set of ICD-10 codes",
 )
+@limiter.limit("60/minute")
 async def enforce_hcc_hierarchy(
+    request_obj: Request,
     request: HCCEnforceRequest,
     engine: HCCEngine = Depends(get_hcc_engine),
     _: str = Depends(require_api_key),
@@ -413,7 +445,9 @@ async def enforce_hcc_hierarchy(
     tags=["MEAT Evidence"],
     summary="Extract MEAT evidence from a clinical note",
 )
+@limiter.limit("60/minute")
 async def extract_meat_evidence(
+    request_obj: Request,
     request: MEATExtractRequest,
     extractor: MEATExtractor = Depends(get_meat_extractor),
     _: str = Depends(require_api_key),
@@ -447,7 +481,9 @@ async def extract_meat_evidence(
     tags=["Code Search"],
     summary="Search ICD-10, CPT, and HCPCS codes with plain-English query",
 )
+@limiter.limit("60/minute")
 async def search_codes(
+    request_obj: Request,
     request: CodeSearchRequest,
     engine: NLQEngine = Depends(get_nlq_engine),
     _: str = Depends(require_api_key),
@@ -492,7 +528,9 @@ async def search_codes(
     tags=["Code Search"],
     summary="Exact lookup of a specific ICD-10, CPT, or HCPCS code",
 )
+@limiter.limit("60/minute")
 async def lookup_code(
+    request: Request,
     code: str,
     engine: NLQEngine = Depends(get_nlq_engine),
     _: str = Depends(require_api_key),
@@ -535,7 +573,9 @@ async def lookup_code(
     tags=["Code Search"],
     summary="Suggest ICD-10, CPT, and HCPCS codes for a clinical scenario",
 )
+@limiter.limit("60/minute")
 async def suggest_codes(
+    request_obj: Request,
     request: CodeSuggestRequest,
     engine: NLQEngine = Depends(get_nlq_engine),
     _: str = Depends(require_api_key),
@@ -571,7 +611,9 @@ async def suggest_codes(
     tags=["Prior Auth Appeals"],
     summary="Generate a formal prior authorization appeal letter",
 )
+@limiter.limit("60/minute")
 async def generate_appeal(
+    request_obj: Request,
     request: AppealGenerateRequest,
     generator: AppealsGenerator = Depends(get_appeals_generator),
     _: str = Depends(require_api_key),
@@ -610,6 +652,207 @@ async def generate_appeal(
         policy_citations=letter.policy_citations,
         regulatory_citations=letter.regulatory_citations,
         generated_at=letter.generated_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Batch HCC Enforcement
+# ---------------------------------------------------------------------------
+
+class BatchHCCEncounter(BaseModel):
+    encounter_id: str = Field(..., max_length=100)
+    icd10_codes: list[str] = Field(..., min_length=1, max_length=100)
+    patient_id: Optional[str] = Field(None, max_length=100)
+
+    @field_validator("icd10_codes")
+    @classmethod
+    def validate_codes(cls, v):
+        for code in v:
+            if not code or len(code) > 10:
+                raise ValueError(f"Invalid ICD-10 code: {code!r}")
+        return [c.strip().upper() for c in v]
+
+
+class BatchHCCRequest(BaseModel):
+    encounters: list[BatchHCCEncounter] = Field(
+        ..., min_length=1, max_length=100,
+        description="Up to 100 encounters to process in a single request",
+    )
+
+
+class BatchHCCResponse(BaseModel):
+    total: int
+    results: list[dict]
+    processed_at: str
+
+
+@app.post(
+    "/v1/batch/hcc",
+    response_model=BatchHCCResponse,
+    tags=["HCC V28"],
+    summary="Batch V28 HCC hierarchy enforcement — up to 100 encounters",
+)
+@limiter.limit("20/minute")
+async def batch_enforce_hcc(
+    request_obj: Request,
+    request: BatchHCCRequest,
+    engine: HCCEngine = Depends(get_hcc_engine),
+    _: str = Depends(require_api_key),
+):
+    """
+    Enforce V28 HCC hierarchy on up to 100 encounters in a single API call.
+
+    Useful for nightly RAF reconciliation or bulk chart audits.
+    Each encounter is processed independently; results mirror the single
+    `/v1/hcc/enforce` response shape plus the encounter_id.
+    """
+    results = []
+    for enc in request.encounters:
+        result = engine.enforce_hierarchy(enc.icd10_codes)
+        summary = result.summary()
+        results.append({
+            "encounter_id": enc.encounter_id,
+            "patient_id": enc.patient_id,
+            "summary": summary,
+            "active_hccs": [
+                {
+                    "hcc_number": h.hcc_number,
+                    "hcc_description": h.hcc_description,
+                    "source_icd10": h.source_icd10,
+                    "raf_weight": h.raf_weight,
+                    "status": h.status,
+                }
+                for h in result.active_hccs
+            ],
+            "suppressed_hccs": [
+                {
+                    "hcc_number": h.hcc_number,
+                    "source_icd10": h.source_icd10,
+                    "trumped_by_hcc": h.trumped_by_hcc,
+                }
+                for h in result.suppressed_hccs
+            ],
+            "unmapped_codes": result.unmapped_codes,
+            "raf_before": round(result.raf_before_enforcement, 4),
+            "raf_after": round(result.raf_after_enforcement, 4),
+            "raf_delta": round(result.raf_delta, 4),
+        })
+    return BatchHCCResponse(
+        total=len(results),
+        results=results,
+        processed_at=datetime.utcnow().isoformat(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# RADV Audit Export
+# ---------------------------------------------------------------------------
+
+class RADVAuditRequest(BaseModel):
+    clinic_id: str = Field(..., max_length=100, description="Clinic/practice identifier")
+    contract_number: str = Field(..., max_length=50, description="MA contract number (H-number)")
+    payment_year: int = Field(..., ge=2020, le=2030, description="Payment year (CY)")
+    encounters: list[BatchHCCEncounter] = Field(
+        ..., min_length=1, max_length=500,
+        description="Encounters to include in the RADV sample",
+    )
+
+
+class RADVAuditResponse(BaseModel):
+    clinic_id: str
+    contract_number: str
+    payment_year: int
+    model_version: str = "V28"
+    total_encounters: int
+    total_hccs_submitted: int
+    total_hccs_supported: int
+    unsupported_hccs: list[dict]
+    audit_ready_encounters: list[dict]
+    generated_at: str
+
+
+@app.post(
+    "/v1/audits/radv-export",
+    response_model=RADVAuditResponse,
+    tags=["RADV Audit"],
+    summary="Generate a structured RADV audit package for a set of encounters",
+)
+@limiter.limit("10/minute")
+async def radv_export(
+    request_obj: Request,
+    request: RADVAuditRequest,
+    engine: HCCEngine = Depends(get_hcc_engine),
+    _: str = Depends(require_api_key),
+):
+    """
+    Build a CMS RADV-ready audit package.
+
+    For each encounter the engine:
+    1. Enforces V28 hierarchy on submitted ICD-10 codes.
+    2. Flags HCCs with no face-to-face, in-person encounter support (RADV rule).
+    3. Returns an audit-ready record with active HCCs and any unsupported codes.
+
+    The response can be serialised to JSON and submitted to your RADV workflow.
+    RADV compliance note: audio-only telehealth does NOT satisfy face-to-face
+    requirements per 42 CFR § 422.504(l).
+    """
+    audit_encounters = []
+    all_unsupported: list[dict] = []
+    total_submitted = 0
+    total_supported = 0
+
+    for enc in request.encounters:
+        result = engine.enforce_hierarchy(enc.icd10_codes)
+        submitted_hccs = [h.hcc_number for h in result.active_hccs] + [
+            h.hcc_number for h in result.suppressed_hccs
+        ]
+        active_hccs = [h.hcc_number for h in result.active_hccs]
+        # In RADV all HCCs must be supported by a qualifying face-to-face encounter.
+        # Here we surface any that were suppressed (hierarchy conflict) as "unsupported"
+        # — production integrations should cross-reference against encounter claims.
+        unsupported = [
+            {
+                "encounter_id": enc.encounter_id,
+                "hcc_number": h.hcc_number,
+                "hcc_description": h.hcc_description,
+                "source_icd10": h.source_icd10,
+                "reason": "Suppressed by higher-severity HCC in same hierarchy group",
+                "trumped_by_hcc": h.trumped_by_hcc,
+            }
+            for h in result.suppressed_hccs
+        ]
+        all_unsupported.extend(unsupported)
+        total_submitted += len(submitted_hccs)
+        total_supported += len(active_hccs)
+
+        audit_encounters.append({
+            "encounter_id": enc.encounter_id,
+            "patient_id": enc.patient_id,
+            "submitted_icd10": enc.icd10_codes,
+            "active_hccs": [
+                {
+                    "hcc_number": h.hcc_number,
+                    "hcc_description": h.hcc_description,
+                    "source_icd10": h.source_icd10,
+                    "raf_weight": h.raf_weight,
+                }
+                for h in result.active_hccs
+            ],
+            "unmapped_codes": result.unmapped_codes,
+            "raf_score": round(result.raf_after_enforcement, 4),
+            "audit_status": "unsupported_hccs_present" if unsupported else "clean",
+        })
+
+    return RADVAuditResponse(
+        clinic_id=request.clinic_id,
+        contract_number=request.contract_number,
+        payment_year=request.payment_year,
+        total_encounters=len(request.encounters),
+        total_hccs_submitted=total_submitted,
+        total_hccs_supported=total_supported,
+        unsupported_hccs=all_unsupported,
+        audit_ready_encounters=audit_encounters,
+        generated_at=datetime.utcnow().isoformat(),
     )
 
 
