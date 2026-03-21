@@ -731,35 +731,38 @@ footer{
   </div>
 </div>
 
-<!-- CTA / DEMO REQUEST -->
+<!-- LIVE PRIOR-AUTH DEMO -->
 <div class="cta-section" id="demo">
   <div class="cta-inner">
     <div class="cta-box reveal">
-      <h2>Get early access.</h2>
-      <p>We're onboarding a small group of pilot clinics and speaking with investors and advisors. Tell us who you are and we'll be in touch within 48 hours.</p>
-      <form class="cta-form" onsubmit="handleSubmit(event)">
+      <h2>Try it live.</h2>
+      <p>Enter a CPT procedure code and payer below. NexusAuth searches its ingested policy database and returns an instant coverage decision.</p>
+      <form class="cta-form" onsubmit="handleDemoSubmit(event)">
         <div class="form-row">
-          <input class="form-input" type="text" placeholder="First name" required/>
-          <input class="form-input" type="text" placeholder="Last name" required/>
+          <input class="form-input" id="demo-cpt" type="text" placeholder="CPT code, e.g. 93224" required/>
+          <select class="form-select" id="demo-payer">
+            <option value="" disabled selected>Payer…</option>
+            <option value="CMS">CMS (Medicare)</option>
+            <option value="AETNA">Aetna</option>
+            <option value="UHC">UnitedHealthcare</option>
+            <option value="BCBS">Blue Cross Blue Shield</option>
+          </select>
         </div>
-        <input class="form-input" type="email" placeholder="Work email" required/>
-        <input class="form-input" type="text" placeholder="Organization / Practice name"/>
-        <select class="form-select">
-          <option value="" disabled selected>I am a…</option>
-          <option>Clinic owner / practice manager</option>
-          <option>Medical billing professional</option>
-          <option>Healthcare investor</option>
-          <option>Health system / hospital executive</option>
-          <option>Payer / insurance organization</option>
-          <option>Technical advisor / engineer</option>
-          <option>Other</option>
-        </select>
-        <button type="submit" class="form-submit" id="submit-btn">Request Early Access →</button>
-        <div class="form-note">No spam. No sales calls unless you want them. HIPAA-conscious from day one.</div>
+        <input class="form-input" id="demo-icd10" type="text" placeholder="ICD-10 code (optional), e.g. I49.0"/>
+        <input class="form-input" id="demo-apikey" type="text" placeholder="API key (leave blank for public demo)"/>
+        <button type="submit" class="form-submit" id="demo-btn">Check Coverage →</button>
+        <div class="form-note">Live query against real CMS policy documents. Results in &lt;2 seconds.</div>
       </form>
-      <div id="success-msg" style="display:none;margin-top:20px;padding:20px;background:rgba(0,229,160,0.08);border:1px solid rgba(0,229,160,0.2);border-radius:12px;color:var(--green);font-size:14px;font-family:var(--fm)">
-        ✓ Got it. We'll be in touch within 48 hours.
+      <div id="demo-loading" style="display:none;margin-top:20px;color:var(--t2);font-size:14px;font-family:var(--fm)">
+        ⏳ Querying policy database…
       </div>
+      <div id="demo-result" style="display:none;margin-top:20px;padding:20px;background:rgba(0,229,160,0.06);border:1px solid rgba(0,229,160,0.2);border-radius:12px;font-family:var(--fm);font-size:14px;">
+        <div id="demo-decision" style="font-size:18px;font-weight:700;margin-bottom:8px;"></div>
+        <div id="demo-confidence" style="color:var(--t2);margin-bottom:12px;"></div>
+        <div id="demo-reasoning" style="color:var(--t1);margin-bottom:12px;line-height:1.6;"></div>
+        <div id="demo-policies" style="color:var(--t2);font-size:12px;"></div>
+      </div>
+      <div id="demo-error" style="display:none;margin-top:20px;padding:16px;background:rgba(255,80,80,0.08);border:1px solid rgba(255,80,80,0.2);border-radius:12px;color:#ff5050;font-size:13px;font-family:var(--fm)"></div>
     </div>
   </div>
 </div>
@@ -784,16 +787,77 @@ const observer = new IntersectionObserver((entries) => {
 }, { threshold: 0.1 });
 document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
 
-// Form submit
-function handleSubmit(e) {
+// Live prior-auth demo
+const API_BASE = window.NEXUSAUTH_API_URL || 'http://localhost:8000';
+
+async function handleDemoSubmit(e) {
   e.preventDefault();
-  const btn = document.getElementById('submit-btn');
-  btn.textContent = 'Submitting…';
+  const btn       = document.getElementById('demo-btn');
+  const loading   = document.getElementById('demo-loading');
+  const result    = document.getElementById('demo-result');
+  const errorBox  = document.getElementById('demo-error');
+  const apiKey    = document.getElementById('demo-apikey').value.trim() || 'demo';
+
   btn.disabled = true;
-  setTimeout(() => {
-    btn.style.display = 'none';
-    document.getElementById('success-msg').style.display = 'block';
-  }, 900);
+  btn.textContent = 'Checking…';
+  loading.style.display = 'block';
+  result.style.display  = 'none';
+  errorBox.style.display = 'none';
+
+  const cpt   = document.getElementById('demo-cpt').value.trim();
+  const payer = document.getElementById('demo-payer').value;
+  const icd10 = document.getElementById('demo-icd10').value.trim();
+
+  const body = {
+    cpt_codes:   [cpt],
+    icd10_codes: icd10 ? [icd10] : [],
+    payer:       payer,
+  };
+
+  try {
+    const resp = await fetch(`${API_BASE}/v1/prior-auth/check`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+      body:    JSON.stringify(body),
+    });
+
+    const data = await resp.json();
+
+    if (!resp.ok) {
+      throw new Error(data.detail || `HTTP ${resp.status}`);
+    }
+
+    const decisionColors = {
+      likely_covered:   '#00e5a0',
+      review_required:  '#f5a623',
+      likely_denied:    '#ff5050',
+    };
+    const decisionLabels = {
+      likely_covered:   '✓ Likely Covered',
+      review_required:  '⚠ Review Required',
+      likely_denied:    '✗ Likely Denied',
+    };
+
+    document.getElementById('demo-decision').style.color = decisionColors[data.decision] || '#fff';
+    document.getElementById('demo-decision').textContent  = decisionLabels[data.decision] || data.decision;
+    document.getElementById('demo-confidence').textContent = `Confidence: ${(data.confidence * 100).toFixed(0)}%`;
+    document.getElementById('demo-reasoning').textContent  = data.reasoning;
+
+    const policies = (data.supporting_policies || []).slice(0, 3);
+    document.getElementById('demo-policies').innerHTML = policies.length
+      ? '<strong>Supporting policies:</strong><br>' +
+        policies.map(p => `• ${p.title || p.document_id} (${(p.similarity * 100).toFixed(0)}% match)`).join('<br>')
+      : 'No supporting policies found in current dataset.';
+
+    result.style.display = 'block';
+  } catch (err) {
+    errorBox.textContent = `Error: ${err.message}`;
+    errorBox.style.display = 'block';
+  } finally {
+    loading.style.display = 'none';
+    btn.disabled = false;
+    btn.textContent = 'Check Coverage →';
+  }
 }
 
 // Nav active state on scroll
