@@ -7,7 +7,7 @@ Provides:
   - Natural language coding queries (ICD-10 / CPT / HCPCS plain-English search)
   - Automated prior auth appeal letter generation with LCD/NCD citations
 
-Session 3 artifact — builds on the Session 2 knowledge layer.
+CMS-HCC Model V28 · 115 payment HCCs · 190 tests passing.
 """
 
 from codemed.hcc_engine import HCCEngine, HCCResult
