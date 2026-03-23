@@ -373,7 +373,6 @@ def build_crosswalk_from_cms_data(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import json
     import argparse
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -413,6 +412,6 @@ if __name__ == "__main__":
     print(f"\n{'=' * 60}")
     print(f"Total ICD-10 codes: {len(crosswalk)}")
     print(f"Unique HCCs:        {len(hcc_counts)}")
-    print(f"\nTop 20 HCCs by code count:")
+    print("\nTop 20 HCCs by code count:")
     for hcc, count in sorted(hcc_counts.items(), key=lambda x: -x[1])[:20]:
         print(f"  HCC {hcc:4d}: {count:5d} codes")

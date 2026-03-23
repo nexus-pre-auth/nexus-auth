@@ -15,8 +15,6 @@ Default API key: dev-key-codemed
 """
 
 import os
-import json
-import time
 
 import requests
 import streamlit as st

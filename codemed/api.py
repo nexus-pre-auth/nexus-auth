@@ -31,7 +31,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any, Optional
+from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Security
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,7 +45,7 @@ from codemed.hcc_engine import HCCEngine
 from codemed.meat_extractor import MEATExtractor
 from codemed.nlq_engine import NLQEngine
 from codemed.appeals_generator import AppealsGenerator, DenialScenario
-from codemed.cache import CodeMedCache, CacheNamespace, get_cache
+from codemed.cache import CacheNamespace, get_cache
 from billing.routes import billing_router
 from billing.stripe_config import configure_stripe
 

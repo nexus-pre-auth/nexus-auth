@@ -26,7 +26,7 @@ import logging
 import textwrap
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Optional
+
 
 logger = logging.getLogger(__name__)
 
@@ -421,7 +421,7 @@ class AppealsGenerator:
             f"{scenario.payer_name}",
             "Medical Director / Prior Authorization Appeals Department",
             "",
-            f"RE: FORMAL APPEAL — Prior Authorization Denial",
+            "RE: FORMAL APPEAL — Prior Authorization Denial",
             f"    Patient: {scenario.patient_name} (DOB: {scenario.patient_dob})",
             f"    Member ID: {scenario.insurance_member_id}",
             f"    Claim Number: {scenario.claim_number}",

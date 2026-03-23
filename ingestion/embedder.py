@@ -23,10 +23,9 @@ Model: text-embedding-3-small (1536 dimensions, cost-efficient)
 
 import json
 import logging
-import os
 import time
 from datetime import datetime
-from typing import Any, Generator
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -585,5 +584,5 @@ if __name__ == "__main__":
         print(f"    Preview: {chunk['chunk_text'][:80]}...")
         print()
 
-    print(f"\nChunking test passed ✓")
-    print(f"To test full embedding pipeline, ensure OPENAI_API_KEY is set and DB is running.")
+    print("\nChunking test passed ✓")
+    print("To test full embedding pipeline, ensure OPENAI_API_KEY is set and DB is running.")

@@ -133,11 +133,8 @@ V28_ICD10_TO_HCC: dict[str, tuple[int, str, Optional[str], float]] = {
     # ── Diabetes with Glycemic / No Complications  (HCC 38) ─────────────
     "E10.9":  (38, "T1DM without complications",               "DIABETES",0.118),
     "E11.9":  (38, "T2DM without complications",               "DIABETES",0.118),
-    "E11.65": (38, "T2DM with hyperglycemia",                  "DIABETES",0.118),
     "E13.9":  (38, "Other specified DM without complications", "DIABETES",0.118),
     "E11.69": (38, "T2DM with other specified complication",   "DIABETES",0.118),
-    # NOTE: E11.65 also appears at HCC 37 — in V28, hyperglycemia maps at 37
-    #       E11.65 here is a duplicate entry; the engine deduplicates by HCC rank.
 
     # ── Morbid Obesity  (HCC 48 — standalone) ───────────────────────────
     "E66.01": (48, "Morbid (severe) obesity due to excess calories", None, 0.273),
@@ -506,11 +503,7 @@ class HCCEngine:
         Returns:
             HCCEngine instance with the full CMS crosswalk loaded.
         """
-        from ingestion.scrapers.hcc_model_scraper import (
-            parse_icd10_mapping_zip,
-            parse_coefficient_zip,
-            build_crosswalk_from_cms_data,
-        )
+        from ingestion.scrapers.hcc_model_scraper import build_crosswalk_from_cms_data
 
         crosswalk = build_crosswalk_from_cms_data(
             mappings_url=mappings_url,

@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -487,7 +487,6 @@ class NLQEngine:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import json
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     engine = NLQEngine()

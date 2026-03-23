@@ -16,7 +16,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -455,7 +455,9 @@ class TestIntegrationSmoke:
     @pytest.mark.integration
     def test_scrape_and_ingest_dry_run(self):
         """Dry run scrape completes without errors (network mocked)."""
-        import io, zipfile, csv
+        import csv
+        import io
+        import zipfile
 
         def _make_fake_lcd_zip() -> zipfile.ZipFile:
             """Build a minimal outer ZIP that matches the CMS LCD zip structure."""
@@ -800,7 +802,7 @@ class TestProcessUnembeddedDocuments:
         assert stats.failed_docs == 0
 
     def test_empty_queue_returns_zero_stats(self):
-        from ingestion.embedder import process_unembedded_documents, EmbeddingStats
+        from ingestion.embedder import process_unembedded_documents
         conn, _ = _make_cursor_conn(fetchall=[], description=self._COLUMNS)
         stats = process_unembedded_documents(conn, client=_make_openai_client())
         assert stats.total_docs == 0
