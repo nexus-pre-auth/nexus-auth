@@ -4,6 +4,8 @@
 
 **NexusAuthAI** is a clinical NLP ingestion pipeline for healthcare prior-authorization automation. It scrapes CMS Medicare coverage data, deduplicates it, classifies documents, and generates pgvector embeddings for semantic search. The codebase is a pure backend ETL system — no REST API layer; execution is via CLI.
 
+This pipeline is the knowledge layer for the broader NexusAuth AI platform — it feeds **System 1 (Prior Auth Automation)** and **System 8 (Payer Policy Tracking)** by maintaining a continuously updated, semantically searchable corpus of CMS coverage rules and commercial payer policies.
+
 Downstream routing sends documents to one of two tools:
 - **NexusAuth** — handles prior-auth criteria, LCDs, NCDs, clinical policies, medical necessity, ICD-10 guidelines, transmittals
 - **CODEMED** — handles fee schedules, billing guidelines, formularies, NCCI edits, remittance codes, modifier policies, DRG/OPPS/ASP payment data
