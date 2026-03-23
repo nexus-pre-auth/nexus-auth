@@ -1,5 +1,5 @@
 """
-NexusAuth — Session 2 Pipeline Tests
+CodeMed AI — Session 2 Pipeline Tests
 ======================================
 Tests for the ingestion pipeline components:
   - CMS scraper (offline, using fixture data)
@@ -22,6 +22,8 @@ import pytest
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from tests.conftest import make_cursor_conn as _make_cursor_conn, make_openai_client as _make_openai_client  # noqa: E402
 
 
 # =============================================================================
@@ -518,36 +520,6 @@ class TestIntegrationSmoke:
 # Helpers shared by new test classes
 # =============================================================================
 
-_UNSET = object()   # sentinel — distinguishes "not provided" from "explicitly None"
-
-
-def _make_cursor_conn(fetchone=_UNSET, fetchall=None, description=None):
-    """Return (mock_conn, mock_cursor) wired up as a psycopg2 context manager."""
-    mock_conn = MagicMock()
-    mock_cursor = MagicMock()
-    if fetchone is not _UNSET:
-        mock_cursor.fetchone.return_value = fetchone
-    if fetchall is not None:
-        if isinstance(fetchall, list) and fetchall and isinstance(fetchall[0], list):
-            mock_cursor.fetchall.side_effect = fetchall   # multiple calls
-        else:
-            mock_cursor.fetchall.return_value = fetchall  # single return value
-    if description is not None:
-        mock_cursor.description = description
-    mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
-    mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
-    return mock_conn, mock_cursor
-
-
-def _make_openai_client(vectors=None, n=1):
-    """Return a mock OpenAI client whose .embeddings.create() returns n vectors."""
-    if vectors is None:
-        vectors = [[0.1] * 1536] * n
-    client = MagicMock()
-    client.embeddings.create.return_value.data = [
-        MagicMock(embedding=v) for v in vectors
-    ]
-    return client
 
 
 # =============================================================================
