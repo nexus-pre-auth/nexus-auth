@@ -214,7 +214,7 @@ def list_denials(clinic_id: str):
             rows = [dict(r) for r in cur.fetchall()]
 
             cur.execute(
-                f"SELECT COUNT(*) FROM recoverable_denials WHERE {where[:-len(' LIMIT %s OFFSET %s') if False else '']}",
+                f"SELECT COUNT(*) FROM recoverable_denials WHERE {where}",
                 params[:-2],
             )
             total = cur.fetchone()["count"]
